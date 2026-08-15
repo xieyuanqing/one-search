@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/one-search/one-search/backend/internal/model"
@@ -206,21 +207,36 @@ func (h *Handler) handleMCPToolCall(r *http.Request, req mcpRequest) (interface{
 	if err := json.Unmarshal(req.Params, &params); err != nil {
 		return nil, mcpInvalidParams(req.ID, "invalid params")
 	}
-	if params.Name != "search" {
+
+	switch params.Name {
+	case "search":
+		return h.handleMCPSearch(r, req, params.Arguments)
+	case "fetch":
+		return h.handleMCPFetch(r, req, params.Arguments)
+	case "fetch_many":
+		return h.handleMCPFetchMany(r, req, params.Arguments)
+	case "search_and_fetch":
+		return h.handleMCPSearchAndFetch(r, req, params.Arguments)
+	case "batch_search":
+		return h.handleMCPBatchSearch(r, req, params.Arguments)
+	case "status":
+		return h.handleMCPStatus(r, req)
+	default:
 		return nil, mcpInvalidParams(req.ID, "unknown tool: "+params.Name)
 	}
+}
 
-	// 蓝图复刻:解析蓝图参数面 — sources(逗号分隔字符串), num, intent, mode, domain_boost, debug 等
+func (h *Handler) handleMCPSearch(r *http.Request, req mcpRequest, args json.RawMessage) (interface{}, *mcpResponse) {
 	var rawArgs map[string]interface{}
-	if len(params.Arguments) > 0 {
-		if err := json.Unmarshal(params.Arguments, &rawArgs); err != nil {
+	if len(args) > 0 {
+		if err := json.Unmarshal(args, &rawArgs); err != nil {
 			return nil, mcpInvalidParams(req.ID, "invalid search arguments")
 		}
 	}
 
 	var searchReq model.SearchRequest
-	if len(params.Arguments) > 0 {
-		if err := json.Unmarshal(params.Arguments, &searchReq); err != nil {
+	if len(args) > 0 {
+		if err := json.Unmarshal(args, &searchReq); err != nil {
 			return nil, mcpInvalidParams(req.ID, "invalid search arguments")
 		}
 	}
@@ -244,17 +260,17 @@ func (h *Handler) handleMCPToolCall(r *http.Request, req mcpRequest) (interface{
 			searchReq.ProvidersExplicit = true
 		}
 	} else if len(searchReq.Providers) > 0 {
-		searchReq.ProvidersExplicit = hasJSONField(params.Arguments, "providers") || hasJSONField(params.Arguments, "sources")
+		searchReq.ProvidersExplicit = hasJSONField(args, "providers") || hasJSONField(args, "sources")
 	}
 
 	// num → Limit [蓝图 §2.1: num 是 RRF 融合后的最终总结果数]
 	if num, ok := rawArgs["num"].(float64); ok && num > 0 {
 		searchReq.Limit = int(num)
 		searchReq.LimitExplicit = true
-	} else if !hasJSONField(params.Arguments, "limit") && !hasJSONField(params.Arguments, "num") {
+	} else if !hasJSONField(args, "limit") && !hasJSONField(args, "num") {
 		searchReq.LimitExplicit = false
 	} else {
-		searchReq.LimitExplicit = hasJSONField(params.Arguments, "limit") || hasJSONField(params.Arguments, "num")
+		searchReq.LimitExplicit = hasJSONField(args, "limit") || hasJSONField(args, "num")
 	}
 
 	// mode 显式标记
@@ -325,6 +341,225 @@ func (h *Handler) handleMCPToolCall(r *http.Request, req mcpRequest) (interface{
 	return map[string]interface{}{
 		"content":           []mcpContent{{Type: "text", Text: string(payload)}},
 		"structuredContent": formatted,
+		"isError":           false,
+	}, nil
+}
+
+func (h *Handler) handleMCPFetch(r *http.Request, req mcpRequest, args json.RawMessage) (interface{}, *mcpResponse) {
+	var fetchReq model.FetchRequest
+	if len(args) > 0 {
+		if err := json.Unmarshal(args, &fetchReq); err != nil {
+			return nil, mcpInvalidParams(req.ID, "invalid fetch arguments")
+		}
+	}
+	if strings.TrimSpace(fetchReq.URL) == "" {
+		return nil, mcpInvalidParams(req.ID, "url is required")
+	}
+
+	result := h.fetcher.Fetch(r.Context(), fetchReq)
+	payload, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return mcpToolError(err.Error()), nil
+	}
+	return map[string]interface{}{
+		"content":           []mcpContent{{Type: "text", Text: string(payload)}},
+		"structuredContent": result,
+		"isError":           result.Error != "",
+	}, nil
+}
+
+func (h *Handler) handleMCPFetchMany(r *http.Request, req mcpRequest, args json.RawMessage) (interface{}, *mcpResponse) {
+	var fetchManyReq model.FetchManyRequest
+	if len(args) > 0 {
+		if err := json.Unmarshal(args, &fetchManyReq); err != nil {
+			return nil, mcpInvalidParams(req.ID, "invalid fetch_many arguments")
+		}
+	}
+	if len(fetchManyReq.URLs) == 0 {
+		return nil, mcpInvalidParams(req.ID, "urls is required")
+	}
+
+	result := h.fetcher.FetchMany(r.Context(), fetchManyReq)
+	payload, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return mcpToolError(err.Error()), nil
+	}
+	return map[string]interface{}{
+		"content":           []mcpContent{{Type: "text", Text: string(payload)}},
+		"structuredContent": result,
+		"isError":           false,
+	}, nil
+}
+
+func (h *Handler) handleMCPSearchAndFetch(r *http.Request, req mcpRequest, args json.RawMessage) (interface{}, *mcpResponse) {
+	var sfReq model.SearchAndFetchRequest
+	if len(args) > 0 {
+		if err := json.Unmarshal(args, &sfReq); err != nil {
+			return nil, mcpInvalidParams(req.ID, "invalid search_and_fetch arguments")
+		}
+	}
+	if strings.TrimSpace(sfReq.Query) == "" {
+		return nil, mcpInvalidParams(req.ID, "query is required")
+	}
+
+	searchArgs, _ := json.Marshal(model.SearchRequest{
+		Query:       sfReq.Query,
+		Intent:      model.SearchIntent(sfReq.Intent),
+		Mode:        model.SearchMode(sfReq.Mode),
+		Freshness:   sfReq.Freshness,
+		Limit:       sfReq.Num,
+		DomainBoost: sfReq.DomainBoost,
+		Debug:       sfReq.Debug,
+	})
+
+	searchRes, errResp := h.handleMCPSearch(r, req, searchArgs)
+	if errResp != nil {
+		return nil, errResp
+	}
+
+	searchMap, ok := searchRes.(map[string]interface{})
+	if !ok {
+		return searchRes, nil
+	}
+
+	fetchTop := sfReq.FetchTop
+	if fetchTop <= 0 {
+		fetchTop = 2 // Blueprint §2.3 recommended 2-3
+	}
+
+	// Extract URLs from search results
+	urls := make([]string, 0)
+	if structured, ok := searchMap["structuredContent"].(map[string]interface{}); ok {
+		if results, ok := structured["results"].([]map[string]interface{}); ok {
+			for i, res := range results {
+				if i >= fetchTop {
+					break
+				}
+				if u, ok := res["url"].(string); ok && u != "" {
+					urls = append(urls, u)
+				}
+			}
+		}
+	}
+
+	fetchResults := h.fetcher.FetchMany(r.Context(), model.FetchManyRequest{
+		URLs:            urls,
+		MaxCharsPerPage: sfReq.MaxCharsPerPage,
+		RemoteFirst:     sfReq.RemoteFirst,
+	})
+
+	combined := map[string]interface{}{
+		"search":  searchMap["structuredContent"],
+		"fetched": fetchResults.Results,
+	}
+
+	payload, _ := json.MarshalIndent(combined, "", "  ")
+	return map[string]interface{}{
+		"content":           []mcpContent{{Type: "text", Text: string(payload)}},
+		"structuredContent": combined,
+		"isError":           false,
+	}, nil
+}
+
+func (h *Handler) handleMCPBatchSearch(r *http.Request, req mcpRequest, args json.RawMessage) (interface{}, *mcpResponse) {
+	var rawArgs struct {
+		Queries       []string `json:"queries"`
+		ReturnBuckets bool     `json:"return_buckets"`
+		Num           int      `json:"num"`
+		Intent        string   `json:"intent"`
+		Mode          string   `json:"mode"`
+		Sources       string   `json:"sources"`
+		Freshness     string   `json:"freshness"`
+	}
+	if len(args) > 0 {
+		if err := json.Unmarshal(args, &rawArgs); err != nil {
+			return nil, mcpInvalidParams(req.ID, "invalid batch_search arguments")
+		}
+	}
+
+	if len(rawArgs.Queries) == 0 {
+		return nil, mcpInvalidParams(req.ID, "queries array is required")
+	}
+	if len(rawArgs.Queries) > 4 {
+		rawArgs.Queries = rawArgs.Queries[:4] // Blueprint §2.2: max 4 queries
+	}
+
+	type queryBucket struct {
+		Query    string      `json:"query"`
+		Response interface{} `json:"response"`
+	}
+
+	buckets := make([]queryBucket, len(rawArgs.Queries))
+	var wg sync.WaitGroup
+
+	for i, q := range rawArgs.Queries {
+		wg.Add(1)
+		go func(idx int, queryStr string) {
+			defer wg.Done()
+			qArgs, _ := json.Marshal(model.SearchRequest{
+				Query:     queryStr,
+				Intent:    model.SearchIntent(rawArgs.Intent),
+				Mode:      model.SearchMode(rawArgs.Mode),
+				Freshness: rawArgs.Freshness,
+				Limit:     rawArgs.Num,
+			})
+			res, _ := h.handleMCPSearch(r, req, qArgs)
+			if resMap, ok := res.(map[string]interface{}); ok {
+				buckets[idx] = queryBucket{Query: queryStr, Response: resMap["structuredContent"]}
+			}
+		}(i, q)
+	}
+	wg.Wait()
+
+	result := map[string]interface{}{
+		"count":   len(buckets),
+		"buckets": buckets,
+	}
+
+	payload, _ := json.MarshalIndent(result, "", "  ")
+	return map[string]interface{}{
+		"content":           []mcpContent{{Type: "text", Text: string(payload)}},
+		"structuredContent": result,
+		"isError":           false,
+	}, nil
+}
+
+func (h *Handler) handleMCPStatus(r *http.Request, req mcpRequest) (interface{}, *mcpResponse) {
+	providers, _ := h.store.ListProviders(r.Context())
+	settings, _ := h.store.RuntimeSettings(r.Context())
+
+	provNames := make([]string, 0)
+	for _, p := range providers {
+		if p.Enabled {
+			provNames = append(provNames, p.Name)
+		}
+	}
+
+	statusMap := map[string]interface{}{
+		"server": "one-search-relay",
+		"version": "1.0.0-blueprint-v1",
+		"providers_available": provNames,
+		"default_policy": map[string]interface{}{
+			"mode": "deep",
+			"sources": []string{"brave", "grok"},
+			"freshness": nil,
+			"why": "default: deep mode, brave+grok, no freshness — baseline policy",
+		},
+		"intent_defaults": []string{"factual", "status", "comparison", "tutorial", "exploratory", "news", "resource"},
+		"rrf_weights": map[string]float64{
+			"grok": 1.2,
+			"brave": 1.0,
+			"exa": 1.0,
+			"tavily": 0.6,
+		},
+		"domain_boost_multiplier": 1.5,
+		"runtime_settings": settings,
+	}
+
+	payload, _ := json.MarshalIndent(statusMap, "", "  ")
+	return map[string]interface{}{
+		"content":           []mcpContent{{Type: "text", Text: string(payload)}},
+		"structuredContent": statusMap,
 		"isError":           false,
 	}, nil
 }
@@ -414,9 +649,184 @@ func negotiateMCPProtocolVersion(params json.RawMessage) string {
 }
 
 func mcpAllToolSchemas() []interface{} {
-	// 蓝图复刻:六个工具。当前阶段已实现 search,其余后续阶段补齐。
+	// 蓝图复刻:六个工具
 	return []interface{}{
 		mcpSearchToolSchema(),
+		mcpFetchToolSchema(),
+		mcpFetchManyToolSchema(),
+		mcpSearchAndFetchToolSchema(),
+		mcpBatchSearchToolSchema(),
+		mcpStatusToolSchema(),
+	}
+}
+
+func mcpFetchToolSchema() map[string]interface{} {
+	return map[string]interface{}{
+		"name":        "fetch",
+		"title":       "Fetch Webpage",
+		"description": "Fetch and extract clean markdown content from a URL via remote-first pipeline (markdown.new -> Jina Reader).",
+		"inputSchema": map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"url": map[string]interface{}{
+					"type":        "string",
+					"description": "The URL to fetch.",
+				},
+				"max_chars": map[string]interface{}{
+					"type":        "integer",
+					"description": "Max characters to return. Default 6000.",
+				},
+				"offset": map[string]interface{}{
+					"type":        "integer",
+					"description": "Character offset for pagination/continuation.",
+				},
+				"extract_mode": map[string]interface{}{
+					"type":        "string",
+					"description": "Extraction mode.",
+				},
+				"remote_first": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Whether to prioritize remote extractor.",
+				},
+			},
+			"required": []string{"url"},
+		},
+	}
+}
+
+func mcpFetchManyToolSchema() map[string]interface{} {
+	return map[string]interface{}{
+		"name":        "fetch_many",
+		"title":       "Fetch Multiple Webpages",
+		"description": "Concurrently fetch multiple URLs with extraction and offset tracking.",
+		"inputSchema": map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"urls": map[string]interface{}{
+					"type":        "array",
+					"description": "List of URLs to fetch.",
+					"items":       map[string]interface{}{"type": "string"},
+				},
+				"max_chars_per_page": map[string]interface{}{
+					"type":        "integer",
+					"description": "Max characters per page. Default 6000.",
+				},
+				"remote_first": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Whether to prioritize remote extractor.",
+				},
+			},
+			"required": []string{"urls"},
+		},
+	}
+}
+
+func mcpSearchAndFetchToolSchema() map[string]interface{} {
+	return map[string]interface{}{
+		"name":        "search_and_fetch",
+		"title":       "Search and Fetch Top Results",
+		"description": "Run search and immediately fetch full text for top N results.",
+		"inputSchema": map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"query": map[string]interface{}{
+					"type":        "string",
+					"description": "Search query.",
+				},
+				"intent": map[string]interface{}{
+					"type":        "string",
+					"description": "Search intent.",
+				},
+				"mode": map[string]interface{}{
+					"type":        "string",
+					"description": "Search mode (fast/deep/answer).",
+				},
+				"sources": map[string]interface{}{
+					"type":        "string",
+					"description": "Comma-separated providers.",
+				},
+				"num": map[string]interface{}{
+					"type":        "integer",
+					"description": "Total search results count.",
+				},
+				"freshness": map[string]interface{}{
+					"type":        "string",
+					"description": "Freshness filter.",
+				},
+				"fetch_top": map[string]interface{}{
+					"type":        "integer",
+					"description": "Number of top results to fetch. Default 2.",
+				},
+				"max_chars_per_page": map[string]interface{}{
+					"type":        "integer",
+					"description": "Max chars per fetched page. Default 6000.",
+				},
+				"domain_boost": map[string]interface{}{
+					"type":        "string",
+					"description": "Domain boost pattern.",
+				},
+				"debug": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Include debug info.",
+				},
+			},
+			"required": []string{"query"},
+		},
+	}
+}
+
+func mcpBatchSearchToolSchema() map[string]interface{} {
+	return map[string]interface{}{
+		"name":        "batch_search",
+		"title":       "Batch Search Queries",
+		"description": "Concurrently execute up to 4 non-overlapping queries and merge with RRF.",
+		"inputSchema": map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"queries": map[string]interface{}{
+					"type":        "array",
+					"description": "List of mutually exclusive search queries (max 4).",
+					"items":       map[string]interface{}{"type": "string"},
+				},
+				"return_buckets": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Whether to return raw per-query result buckets.",
+				},
+				"num": map[string]interface{}{
+					"type":        "integer",
+					"description": "Per-bucket and total merged results cap. Default 10.",
+				},
+				"intent": map[string]interface{}{
+					"type":        "string",
+					"description": "Search intent.",
+				},
+				"mode": map[string]interface{}{
+					"type":        "string",
+					"description": "Search mode.",
+				},
+				"sources": map[string]interface{}{
+					"type":        "string",
+					"description": "Comma-separated providers.",
+				},
+				"freshness": map[string]interface{}{
+					"type":        "string",
+					"description": "Freshness filter.",
+				},
+			},
+			"required": []string{"queries"},
+		},
+	}
+}
+
+func mcpStatusToolSchema() map[string]interface{} {
+	return map[string]interface{}{
+		"name":        "status",
+		"title":       "Server Status and Config",
+		"description": "Return full server capabilities, intent defaults, active providers, and RRF weights.",
+		"inputSchema": map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{},
+		},
 	}
 }
 

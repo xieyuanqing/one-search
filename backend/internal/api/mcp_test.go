@@ -87,8 +87,8 @@ func TestMCPStreamableHTTPHandshakeAndListTools(t *testing.T) {
 	if err := json.Unmarshal(toolsRec.Body.Bytes(), &toolsResp); err != nil {
 		t.Fatalf("decode tools/list response: %v", err)
 	}
-	if toolsResp.JSONRPC != "2.0" || toolsResp.ID != 2 || len(toolsResp.Result.Tools) != 1 {
-		t.Fatalf("unexpected tools/list response: %+v", toolsResp)
+	if toolsResp.JSONRPC != "2.0" || toolsResp.ID != 2 || len(toolsResp.Result.Tools) != 6 {
+		t.Fatalf("unexpected tools/list response count: %+v", toolsResp)
 	}
 	tool := toolsResp.Result.Tools[0]
 	if tool.Name != "search" || tool.Description == "" || tool.InputSchema["type"] != "object" {

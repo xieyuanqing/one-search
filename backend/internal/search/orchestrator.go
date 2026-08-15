@@ -17,6 +17,7 @@ import (
 
 	"github.com/one-search/one-search/backend/internal/model"
 	"github.com/one-search/one-search/backend/internal/provider"
+	"github.com/one-search/one-search/backend/internal/verifier"
 )
 
 const emptyResultCacheTTLSeconds = 60
@@ -40,6 +41,7 @@ type Orchestrator struct {
 	registry       *provider.Registry
 	keyPool        KeyPool
 	store          Store
+	verifier       *verifier.Verifier
 	quotaMu        sync.Mutex
 	quotaRefreshes map[int64]quotaRefreshState
 	searchGroup    singleflight.Group
@@ -52,7 +54,13 @@ type quotaRefreshState struct {
 }
 
 func NewOrchestrator(registry *provider.Registry, keyPool KeyPool, store Store) *Orchestrator {
-	return &Orchestrator{registry: registry, keyPool: keyPool, store: store, quotaRefreshes: map[int64]quotaRefreshState{}}
+	return &Orchestrator{
+		registry:       registry,
+		keyPool:        keyPool,
+		store:          store,
+		verifier:       verifier.NewVerifier(nil),
+		quotaRefreshes: map[int64]quotaRefreshState{},
+	}
 }
 
 func (o *Orchestrator) Search(ctx context.Context, req model.SearchRequest, requestID string, apiTokenID int64) (model.SearchResponse, error) {
@@ -200,8 +208,9 @@ func (o *Orchestrator) Search(ctx context.Context, req model.SearchRequest, requ
 	// debug 模式 [蓝图 §2.1 debug 参数]
 	if req.Debug {
 		debug := &model.SearchDebug{
-			Policy: resolvedPolicy,
-			Latency: outcome.latencies,
+			Policy:      resolvedPolicy,
+			Latency:     outcome.latencies,
+			VerifyTrace: outcome.verifyTraces,
 		}
 		response.Debug = debug
 	}
@@ -234,6 +243,7 @@ type searchOutcome struct {
 	status          string
 	errorMessage    string
 	latencies       map[string]int64
+	verifyTraces    []model.VerifyTrace
 }
 
 func (o *Orchestrator) executeSearch(
@@ -266,6 +276,15 @@ func (o *Orchestrator) executeSearch(
 
 	// 蓝图复刻:用加权 RRF 融合替代原来的简单 mergeResults
 	results, deduped, warnings := mergeWithRRF(providerResults, req)
+
+	var verifyTraces []model.VerifyTrace
+	// 如果启用 Grok 或 deep mode 验证
+	if req.Mode == model.SearchModeDeep && len(results) > 0 && o.verifier != nil {
+		var vWarns []string
+		results, verifyTraces, vWarns = o.verifier.VerifyResults(ctx, results)
+		warnings = append(warnings, vWarns...)
+	}
+
 	status := "success"
 	errorMessage := ""
 	if len(results) == 0 && hasOnlyErrors(providerResults) {
@@ -299,7 +318,14 @@ func (o *Orchestrator) executeSearch(
 			_ = o.store.SetCache(context.Background(), cacheKey, payload, cacheTTLSeconds(settings.CacheTTLSeconds, len(toStore.Results)))
 		}
 	}
-	return searchOutcome{response: response, providerResults: providerResults, status: status, errorMessage: errorMessage, latencies: latencies}, nil
+	return searchOutcome{
+		response:        response,
+		providerResults: providerResults,
+		status:          status,
+		errorMessage:    errorMessage,
+		latencies:       latencies,
+		verifyTraces:    verifyTraces,
+	}, nil
 }
 
 func detachContext(ctx context.Context) (context.Context, context.CancelFunc) {

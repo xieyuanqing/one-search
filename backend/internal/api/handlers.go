@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/one-search/one-search/backend/internal/compat"
+	"github.com/one-search/one-search/backend/internal/fetch"
 	"github.com/one-search/one-search/backend/internal/model"
 	"github.com/one-search/one-search/backend/internal/search"
 )
@@ -58,13 +59,19 @@ type Handler struct {
 	store        AppStore
 	auth         *AuthService
 	orchestrator *search.Orchestrator
+	fetcher      *fetch.Fetcher
 	log          requestLogger
 	mcpEnabled   bool
 	mcpPath      string
 }
 
 func NewHandler(store AppStore, auth *AuthService, orchestrator *search.Orchestrator) *Handler {
-	return &Handler{store: store, auth: auth, orchestrator: orchestrator}
+	return &Handler{
+		store:        store,
+		auth:         auth,
+		orchestrator: orchestrator,
+		fetcher:      fetch.NewFetcher(),
+	}
 }
 
 func (h *Handler) SetLogger(log requestLogger) {
