@@ -5,7 +5,8 @@ export const providerOptions = [
   { label: 'Tavily', value: 'tavily' },
   { label: 'Firecrawl', value: 'firecrawl' },
   { label: 'Serper', value: 'serper' },
-  { label: 'Brave Search', value: 'brave' }
+  { label: 'Brave Search', value: 'brave' },
+  { label: 'Grok (AI Search)', value: 'grok' }
 ]
 
 export const defaultProviders = providerOptions.map((item) => item.value)

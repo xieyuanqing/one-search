@@ -3,7 +3,7 @@ package model
 import "testing"
 
 func TestDefaultProvidersIncludesBuiltInProviders(t *testing.T) {
-	want := []string{ProviderExa, ProviderYou, ProviderJina, ProviderTavily, ProviderFirecrawl, ProviderSerper, ProviderBrave}
+	want := []string{ProviderExa, ProviderYou, ProviderJina, ProviderTavily, ProviderFirecrawl, ProviderSerper, ProviderBrave, ProviderGrok}
 	if len(DefaultProviders) != len(want) {
 		t.Fatalf("DefaultProviders length = %d, want %d", len(DefaultProviders), len(want))
 	}

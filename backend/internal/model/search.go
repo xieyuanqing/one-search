@@ -10,9 +10,10 @@ const (
 	ProviderFirecrawl = "firecrawl"
 	ProviderSerper    = "serper"
 	ProviderBrave     = "brave"
+	ProviderGrok      = "grok"
 )
 
-var DefaultProviders = []string{ProviderExa, ProviderYou, ProviderJina, ProviderTavily, ProviderFirecrawl, ProviderSerper, ProviderBrave}
+var DefaultProviders = []string{ProviderExa, ProviderYou, ProviderJina, ProviderTavily, ProviderFirecrawl, ProviderSerper, ProviderBrave, ProviderGrok}
 
 type SearchMode string
 

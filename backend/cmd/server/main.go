@@ -174,6 +174,13 @@ func buildProviderRegistry(cfg config.Config) (*provider.Registry, error) {
 		}
 		return provider.NewBraveProvider(providerCfg)
 	})
+	registry.RegisterFactory(model.ProviderGrok, func(providerCfg provider.Config) provider.Provider {
+		providerCfg.UserAgent = cfg.UpstreamUserAgent
+		if providerCfg.Timeout == 0 {
+			providerCfg.Timeout = cfg.RequestTimeout
+		}
+		return provider.NewGrokProvider(providerCfg)
+	})
 	return registry, nil
 }
 
