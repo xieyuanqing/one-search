@@ -15,46 +15,70 @@
       <section class="settings-card">
         <div class="sec-hd">
           <div>
-            <h2>搜索默认值</h2>
-            <p>影响 Playground 与未指定参数的 API 请求默认行为</p>
+            <h2>搜索策略</h2>
+            <p>服务端统一解析意图、模式、来源与时效</p>
+          </div>
+          <el-tag type="success" effect="plain">蓝图策略已启用</el-tag>
+        </div>
+        <div class="policy-baseline">
+          <div>
+            <span>无 Intent 基线</span>
+            <strong>深度搜索</strong>
+          </div>
+          <div>
+            <span>默认来源</span>
+            <strong>Brave + Grok</strong>
+          </div>
+          <div>
+            <span>时效范围</span>
+            <strong>不限</strong>
           </div>
         </div>
-        <div class="field-grid">
-          <div class="field">
-            <label>默认模式</label>
-            <el-select v-model="settings.default_mode">
-              <el-option value="parallel" label="并发聚合" />
-              <el-option value="fallback" label="失败转移" />
-              <el-option value="single" label="单平台" />
-            </el-select>
+        <div class="intent-grid">
+          <div v-for="item in intentPolicies" :key="item.intent" class="intent-row">
+            <strong>{{ item.label }}</strong>
+            <span>{{ item.mode }}</span>
+            <span>{{ item.sources }}</span>
+            <span>{{ item.freshness }}</span>
           </div>
+        </div>
+        <div class="field-grid compact-settings">
           <div class="field">
             <label>汇总返回结果数</label>
-            <el-input-number v-model="settings.default_limit" :min="1" controls-position="right" />
-          </div>
-          <div class="field field-full">
-            <label>默认平台</label>
-            <el-select v-model="settings.default_providers" multiple collapse-tags collapse-tags-tooltip>
-              <el-option v-for="item in providerOptions" :key="item.value" :value="item.value" :label="item.label" />
-            </el-select>
+            <el-input-number v-model="settings.default_limit" :min="1" :max="50" controls-position="right" />
           </div>
           <div class="field field-switch">
             <div>
               <label>结果去重</label>
-              <span class="hint">合并结果时按 URL / 标题去重</span>
+              <span class="hint">RRF 融合前按标准化 URL 去重</span>
             </div>
             <el-switch v-model="settings.default_dedupe" />
           </div>
-          <div class="field">
-            <label>平台路由策略</label>
-            <el-select v-model="settings.provider_routing_strategy">
-              <el-option value="fixed" label="固定顺序" />
-              <el-option value="priority" label="优先级优先" />
-              <el-option value="weighted" label="权重优先" />
-              <el-option value="weighted_random" label="按权重随机" />
-              <el-option value="available_keys" label="可用 Key 优先" />
-              <el-option value="random" label="随机" />
-            </el-select>
+        </div>
+        <div class="blueprint-details">
+          <div class="detail-block">
+            <strong>加权 RRF</strong>
+            <span>k = 60 · Brave 1.0 · Grok 1.2 · Exa 1.0 · Tavily 0.6</span>
+          </div>
+          <div class="detail-block">
+            <strong>域名加权</strong>
+            <span>命中 domain_boost 后分数 × 1.5</span>
+          </div>
+          <div class="detail-block">
+            <strong>Verifier</strong>
+            <span>consistency ≥ 0.7 保留为 verified · 确定性 404/410 才判 dead</span>
+          </div>
+          <div class="detail-block">
+            <strong>抓取链</strong>
+            <span>remote-first：markdown.new → Jina Reader · 本地模式：直连</span>
+          </div>
+          <div class="detail-block">
+            <strong>输出格式</strong>
+            <span>compact（默认）· raw · search_result</span>
+          </div>
+          <div class="detail-block muted-detail">
+            <strong>尚未启用</strong>
+            <span>thick_fetch_threshold · stale_score_multiplier</span>
           </div>
         </div>
       </section>
@@ -100,7 +124,7 @@
         <div class="sec-hd">
           <div>
             <h2>搜索缓存（全局）</h2>
-            <p>整次搜索结果缓存 · parallel 部分失败不写 · 相同请求 singleflight 合并</p>
+            <p>整次搜索结果缓存 · 多源部分失败不写 · 相同请求自动合并</p>
           </div>
           <el-tag :type="settings.cache_enabled ? 'success' : 'info'" effect="plain" round>
             {{ settings.cache_enabled ? '已启用' : '已关闭' }}
@@ -170,38 +194,6 @@
         <div class="hint-banner">生成后明文只显示一次，请立即保存到密钥管理系统。操作会写入审计日志。</div>
       </section>
 
-      <section class="settings-card">
-        <div class="sec-hd">
-          <div>
-            <h2>兼容接口</h2>
-            <p>对外暴露第三方形态的搜索入口，可按需开关</p>
-          </div>
-        </div>
-        <div class="compat-grid">
-          <div class="compat-item">
-            <div>
-              <strong>Tavily</strong>
-              <span>/v1/compat/tavily/search</span>
-            </div>
-            <el-switch v-model="settings.compat_tavily_enabled" />
-          </div>
-          <div class="compat-item">
-            <div>
-              <strong>Serper</strong>
-              <span>/v1/compat/serper/search</span>
-            </div>
-            <el-switch v-model="settings.compat_serper_enabled" />
-          </div>
-          <div class="compat-item">
-            <div>
-              <strong>OpenAI</strong>
-              <span>/v1/compat/openai/responses-search</span>
-            </div>
-            <el-switch v-model="settings.compat_openai_enabled" />
-          </div>
-        </div>
-      </section>
-
       <div class="settings-bottom-space" />
     </div>
 
@@ -223,7 +215,6 @@ import PageSkeleton from '../components/PageSkeleton.vue'
 import { ElMessage } from 'element-plus/es/components/message/index'
 import { ElMessageBox } from 'element-plus/es/components/message-box/index'
 import { api, AdminAPIKey, RuntimeSettings } from '../api/client'
-import { providerOptions } from '../utils/providers'
 
 const loading = ref(true)
 const saving = ref(false)
@@ -231,6 +222,16 @@ const settings = ref<RuntimeSettings>()
 const savedSnapshot = ref('')
 const adminAPIKey = ref<AdminAPIKey>()
 const rawAdminAPIKey = ref('')
+
+const intentPolicies = [
+  { intent: 'factual', label: '事实', mode: '快速', sources: 'Brave', freshness: '不限' },
+  { intent: 'status', label: '状态', mode: '深度', sources: 'Brave + Tavily + Grok', freshness: '一周' },
+  { intent: 'comparison', label: '对比', mode: '深度', sources: 'Brave + Grok', freshness: '不限' },
+  { intent: 'tutorial', label: '教程', mode: '深度', sources: 'Brave + Grok', freshness: '不限' },
+  { intent: 'exploratory', label: '探索', mode: '深度', sources: 'Brave + Grok', freshness: '不限' },
+  { intent: 'news', label: '新闻', mode: '深度', sources: 'Brave + Tavily + Grok', freshness: '一周' },
+  { intent: 'resource', label: '资源', mode: '深度', sources: 'Brave + Grok', freshness: '不限' },
+]
 
 const dirty = computed(() => {
   if (!settings.value || !savedSnapshot.value) return false
@@ -242,7 +243,6 @@ function normalize(s: RuntimeSettings): RuntimeSettings {
     ...s,
     default_providers: [...(s.default_providers || [])].sort(),
     provider_health_window_minutes: s.provider_health_window_minutes || 15,
-    provider_routing_strategy: s.provider_routing_strategy || 'fixed',
     log_retention_days: s.log_retention_days || 3,
     search_logs_limit: s.search_logs_limit || 100,
   }
@@ -358,6 +358,58 @@ onMounted(load)
   grid-template-columns: 1fr 1fr;
   gap: 12px;
 }
+.policy-baseline {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border: 1px solid var(--border);
+  background: #f7faf9;
+}
+.policy-baseline > div {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 12px 14px;
+  border-right: 1px solid var(--border);
+}
+.policy-baseline > div:last-child { border-right: 0; }
+.policy-baseline span { color: var(--muted); font-size: 11px; }
+.policy-baseline strong { color: var(--primary-ink); font-size: 14px; }
+.intent-grid {
+  margin-top: 10px;
+  border: 1px solid var(--border);
+}
+.intent-row {
+  display: grid;
+  grid-template-columns: 80px 70px minmax(180px, 1fr) 60px;
+  gap: 12px;
+  align-items: center;
+  min-height: 36px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.intent-row:last-child { border-bottom: 0; }
+.intent-row strong { color: var(--text); }
+.intent-row span { color: var(--muted); }
+.compact-settings { margin-top: 12px; }
+.blueprint-details {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+.detail-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  background: #fbfcfd;
+  font-size: 12px;
+}
+.detail-block strong { color: var(--text); }
+.detail-block span { color: var(--muted); line-height: 1.45; }
+.muted-detail { background: #f6f7f9; }
 .field {
   display: flex;
   flex-direction: column;
@@ -502,7 +554,11 @@ onMounted(load)
 }
 @media (max-width: 860px) {
   .field-grid,
-  .compat-grid { grid-template-columns: 1fr; }
+  .blueprint-details { grid-template-columns: 1fr; }
+  .policy-baseline { grid-template-columns: 1fr; }
+  .policy-baseline > div { border-right: 0; border-bottom: 1px solid var(--border); }
+  .policy-baseline > div:last-child { border-bottom: 0; }
+  .intent-row { grid-template-columns: 64px 56px minmax(0, 1fr) 44px; gap: 6px; font-size: 11px; }
   .admin-key-banner,
   .savebar-inner {
     flex-direction: column;

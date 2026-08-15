@@ -93,6 +93,7 @@ type SearchResponse struct {
 	Results   []SearchResult        `json:"results"`
 	Providers []ProviderCallSummary `json:"providers"`
 	Meta      SearchMeta            `json:"meta"`
+	Answer    string                `json:"answer,omitempty"`
 	// 蓝图复刻:resolved_policy 必须出现在每次 search 返回的顶层
 	ResolvedPolicy *ResolvedPolicy `json:"resolved_policy,omitempty"`
 	// debug 模式下返回的策略详情
@@ -100,8 +101,12 @@ type SearchResponse struct {
 }
 
 type ResolvedPolicy struct {
-	Policy          string `json:"policy"`
-	ModePolicy      string `json:"mode_policy"`
+	Policy          string          `json:"policy"`
+	Mode            SearchMode      `json:"mode"`
+	Sources         []string        `json:"sources"`
+	Freshness       string          `json:"freshness,omitempty"`
+	DomainBoost     string          `json:"domain_boost,omitempty"`
+	ModePolicy      string          `json:"mode_policy"`
 	SourcePolicy    string `json:"source_policy"`
 	FreshnessPolicy string `json:"freshness_policy"`
 	Why             string `json:"why"`

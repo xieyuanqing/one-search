@@ -115,10 +115,13 @@ func (o *Orchestrator) Search(ctx context.Context, req model.SearchRequest, requ
 			}
 		}
 		if !hasTavily {
-			// CJK 查询且非 fast:把 tavily 加到 sources
 			req.Providers = append([]string{model.ProviderTavily}, req.Providers...)
 		}
 	}
+
+	resolvedPolicy.Mode = req.Mode
+	resolvedPolicy.Sources = append([]string(nil), req.Providers...)
+	resolvedPolicy.Freshness = req.Freshness
 
 	providerConfigByName := providerConfigMap(providerConfigs)
 	providerSettings := providerSettingsFromProviders(providerConfigs)
@@ -262,16 +265,12 @@ func (o *Orchestrator) executeSearch(
 ) (searchOutcome, error) {
 	var providerResults []providerExecution
 	switch req.Mode {
-	case model.SearchModeFallback, model.SearchModeDeep:
-		// deep 模式按 fallback 语义:但实际我们用 parallel + RRF 融合更合理
-		// 蓝图 deep = 并发多源 + RRF 融合,不是 fallback
+	case model.SearchModeDeep:
 		providerResults = o.searchParallel(ctx, req, providerConfigByName, providerLimits, keyRetryCounts, providerTimeouts, providerProxies, retryableErrors)
-	case model.SearchModeSingle, model.SearchModeFast:
+	case model.SearchModeFast, model.SearchModeAnswer:
 		providerResults = o.searchSingle(ctx, req, providerConfigByName, providerLimits, keyRetryCounts, providerTimeouts, providerProxies, retryableErrors)
-	case model.SearchModeAnswer:
-		providerResults = o.searchSingle(ctx, req, providerConfigByName, providerLimits, keyRetryCounts, providerTimeouts, providerProxies, retryableErrors)
-	default: // parallel
-		providerResults = o.searchParallel(ctx, req, providerConfigByName, providerLimits, keyRetryCounts, providerTimeouts, providerProxies, retryableErrors)
+	default:
+		return searchOutcome{}, fmt.Errorf("unsupported search mode %q; use fast, deep, or answer", req.Mode)
 	}
 
 	// 蓝图复刻:用加权 RRF 融合替代原来的简单 mergeResults
@@ -311,6 +310,12 @@ func (o *Orchestrator) executeSearch(
 			ProvidersQueried: providersQueried(providerResults),
 			Warnings:         warnings,
 		},
+	}
+	for _, execution := range providerResults {
+		if execution.answer != "" {
+			response.Answer = execution.answer
+			break
+		}
 	}
 	if cacheWrite && shouldWriteSearchCache(req.Mode, status, providerResults) {
 		toStore := truncateResultsForCache(response, settings.CacheMaxResults)
@@ -483,6 +488,9 @@ func (o *Orchestrator) callProvider(ctx context.Context, req model.SearchRequest
 			execution.err = nil
 			execution.errorType = ""
 			execution.results = providerResponse.Results
+			if answer, ok := providerResponse.Raw["answer"].(string); ok {
+				execution.answer = answer
+			}
 			execution.attempts = append(execution.attempts, providerAttempt{
 				Key:          key,
 				KeyAlias:     key.Alias,
@@ -587,13 +595,13 @@ func applyDefaults(req model.SearchRequest, settings model.RuntimeSettings) mode
 		req.Mode = settings.DefaultMode
 	}
 	if req.Mode == "" {
-		req.Mode = model.SearchModeParallel
+		req.Mode = model.SearchModeDeep
 	}
 	if len(req.Providers) == 0 {
 		req.Providers = settings.DefaultProviders
 	}
 	if len(req.Providers) == 0 {
-		req.Providers = append([]string(nil), model.DefaultProviders...)
+		req.Providers = []string{model.ProviderBrave, model.ProviderGrok}
 	}
 	if req.Limit <= 0 {
 		req.Limit = settings.DefaultLimit
@@ -1015,6 +1023,7 @@ type providerExecution struct {
 	err       error
 	latencyMS int64
 	results   []model.SearchResult
+	answer    string
 	attempts  []providerAttempt
 }
 
@@ -1035,6 +1044,9 @@ type searchResponseLogPayload struct {
 	Results         []model.SearchResult        `json:"results"`
 	Providers       []model.ProviderCallSummary `json:"providers"`
 	Meta            model.SearchMeta            `json:"meta"`
+	Answer          string                      `json:"answer,omitempty"`
+	ResolvedPolicy  *model.ResolvedPolicy       `json:"resolved_policy,omitempty"`
+	Debug           *model.SearchDebug          `json:"debug,omitempty"`
 	ProviderResults []providerResultLog         `json:"provider_results,omitempty"`
 	ProviderCalls   []model.ProviderCallLog     `json:"provider_calls,omitempty"`
 }
@@ -1056,6 +1068,9 @@ func responseLogPayload(response model.SearchResponse, executions []providerExec
 		Results:         response.Results,
 		Providers:       response.Providers,
 		Meta:            response.Meta,
+		Answer:          response.Answer,
+		ResolvedPolicy:  response.ResolvedPolicy,
+		Debug:           response.Debug,
 		ProviderResults: providerResultLogs(executions),
 		ProviderCalls:   callLogs(executions),
 	}

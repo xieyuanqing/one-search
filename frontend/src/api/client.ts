@@ -214,12 +214,8 @@ export interface RuntimeSettings {
   cache_enabled: boolean
   cache_ttl_seconds: number
   cache_max_results: number
-  compat_tavily_enabled: boolean
-  compat_serper_enabled: boolean
-  compat_openai_enabled: boolean
   api_auth_required: boolean
   provider_health_window_minutes: number
-  provider_routing_strategy: string
   log_retention_days: number
   search_logs_limit: number
 }

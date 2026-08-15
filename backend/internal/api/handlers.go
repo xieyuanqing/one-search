@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/one-search/one-search/backend/internal/compat"
 	"github.com/one-search/one-search/backend/internal/fetch"
 	"github.com/one-search/one-search/backend/internal/model"
 	"github.com/one-search/one-search/backend/internal/search"
@@ -111,9 +110,6 @@ func (h *Handler) Mount(r chi.Router) {
 
 	r.Route("/v1", func(r chi.Router) {
 		r.With(h.auth.requireAPIToken).Post("/search", h.search)
-		r.With(h.auth.requireAPIToken).Post("/compat/tavily/search", h.tavilySearch)
-		r.With(h.auth.requireAPIToken).Post("/compat/serper/search", h.serperSearch)
-		r.With(h.auth.requireAPIToken).Post("/compat/openai/responses-search", h.openAISearch)
 		r.With(h.auth.requireAPIToken).Get("/providers", h.providers)
 		r.With(h.auth.requireAPIToken).Get("/usage/summary", h.usageSummary)
 	})
@@ -167,6 +163,8 @@ func (h *Handler) search(w http.ResponseWriter, r *http.Request) {
 	}
 	req.LimitExplicit = hasJSONField(body, "limit")
 	req.ProvidersExplicit = hasJSONField(body, "providers")
+	req.ModeExplicit = hasJSONField(body, "mode")
+	req.FreshnessExplicit = hasJSONField(body, "freshness")
 	req.CompatFormat = model.CompatFormatNative
 	h.runSearch(w, r, req)
 }
@@ -184,6 +182,8 @@ func (h *Handler) adminSearch(w http.ResponseWriter, r *http.Request) {
 	}
 	req.LimitExplicit = hasJSONField(body, "limit")
 	req.ProvidersExplicit = hasJSONField(body, "providers")
+	req.ModeExplicit = hasJSONField(body, "mode")
+	req.FreshnessExplicit = hasJSONField(body, "freshness")
 	req.CompatFormat = model.CompatFormatNative
 	requestID := RequestID(r.Context())
 	response, err := h.orchestrator.Search(r.Context(), req, requestID, 0)
@@ -199,99 +199,6 @@ func (h *Handler) adminSearch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, response)
-}
-
-func (h *Handler) tavilySearch(w http.ResponseWriter, r *http.Request) {
-	settings, err := h.store.RuntimeSettings(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if !settings.CompatTavilyEnabled {
-		writeError(w, http.StatusNotFound, "tavily compatibility endpoint is disabled")
-		return
-	}
-	body, err := readBody(r)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
-		return
-	}
-	var req compat.TavilySearchRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
-		return
-	}
-	native := compat.TavilyToNative(req)
-	native.LimitExplicit = hasJSONField(body, "max_results")
-	native.ProvidersExplicit = hasJSONField(body, "providers")
-	response, err := h.orchestrator.Search(r.Context(), native, RequestID(r.Context()), APITokenID(r.Context()))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, compat.TavilyFromNative(req.Query, response))
-}
-
-func (h *Handler) serperSearch(w http.ResponseWriter, r *http.Request) {
-	settings, err := h.store.RuntimeSettings(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if !settings.CompatSerperEnabled {
-		writeError(w, http.StatusNotFound, "serper compatibility endpoint is disabled")
-		return
-	}
-	body, err := readBody(r)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
-		return
-	}
-	var req compat.SerperSearchRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
-		return
-	}
-	native := compat.SerperToNative(req)
-	native.LimitExplicit = hasJSONField(body, "num")
-	native.ProvidersExplicit = hasJSONField(body, "providers")
-	response, err := h.orchestrator.Search(r.Context(), native, RequestID(r.Context()), APITokenID(r.Context()))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, compat.SerperFromNative(req, response))
-}
-
-func (h *Handler) openAISearch(w http.ResponseWriter, r *http.Request) {
-	settings, err := h.store.RuntimeSettings(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if !settings.CompatOpenAIEnabled {
-		writeError(w, http.StatusNotFound, "openai compatibility endpoint is disabled")
-		return
-	}
-	body, err := readBody(r)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
-		return
-	}
-	var req compat.OpenAISearchRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
-		return
-	}
-	native := compat.OpenAIToNative(req)
-	native.LimitExplicit = hasJSONField(body, "limit")
-	native.ProvidersExplicit = hasJSONField(body, "providers")
-	response, err := h.orchestrator.Search(r.Context(), native, RequestID(r.Context()), APITokenID(r.Context()))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	writeJSON(w, http.StatusOK, compat.OpenAIFromNative(response))
 }
 
 func (h *Handler) runSearch(w http.ResponseWriter, r *http.Request, req model.SearchRequest) {

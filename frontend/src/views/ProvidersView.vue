@@ -312,6 +312,7 @@ import { ElMessageBox } from 'element-plus/es/components/message-box/index'
 import { ElNotification } from 'element-plus/es/components/notification/index'
 import { Check, CircleCheck, Clock, Close, CopyDocument, Delete, Plus, Refresh, Remove, WarnTriangleFilled } from '@element-plus/icons-vue'
 import { api, OfficialQuotaResult, ProviderConfig, ProviderKey } from '../api/client'
+import { visibleProviders } from '../utils/providers'
 
 type EditableKey = ProviderKey & { isNew?: boolean }
 type ProviderCard = ProviderConfig & { keyCount: number; enabledKeyCount: number; totalSuccess: number; totalFailure: number; totalCalls: number }
@@ -332,7 +333,7 @@ const quotaLoadingKeyId = ref<number | null>(null)
 const copyingKeyId = ref<number | null>(null)
 const activeTab = ref<'keys' | 'billing' | 'runtime' | 'advanced'>('keys')
 
-const providerCards = computed<ProviderCard[]>(() => providers.value.map((provider) => {
+const providerCards = computed<ProviderCard[]>(() => providers.value.filter((provider) => visibleProviders.has(provider.name)).map((provider) => {
   const ownedKeys = keys.value.filter((item) => item.provider_name === provider.name)
   const totalSuccess = ownedKeys.reduce((sum, item) => sum + item.total_successes, 0)
   const totalFailure = ownedKeys.reduce((sum, item) => sum + item.total_failures, 0)

@@ -1,15 +1,12 @@
 export const providerOptions = [
-  { label: 'Exa', value: 'exa' },
-  { label: 'You.com', value: 'you' },
-  { label: 'Jina', value: 'jina' },
-  { label: 'Tavily', value: 'tavily' },
-  { label: 'Firecrawl', value: 'firecrawl' },
-  { label: 'Serper', value: 'serper' },
   { label: 'Brave Search', value: 'brave' },
+  { label: 'Tavily', value: 'tavily' },
+  { label: 'Exa', value: 'exa' },
   { label: 'Grok (AI Search)', value: 'grok' }
 ]
 
-export const defaultProviders = providerOptions.map((item) => item.value)
+export const visibleProviders = new Set(providerOptions.map((item) => item.value))
+export const defaultProviders = ['brave', 'grok']
 
 export function providerLabel(provider: string) {
   return providerOptions.find((item) => item.value === provider)?.label || provider

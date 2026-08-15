@@ -461,6 +461,11 @@ func (h *Handler) handleMCPSearchAndFetch(r *http.Request, req mcpRequest, args 
 	}, nil
 }
 
+type batchQueryBucket struct {
+	Query    string      `json:"query"`
+	Response interface{} `json:"response"`
+}
+
 func (h *Handler) handleMCPBatchSearch(r *http.Request, req mcpRequest, args json.RawMessage) (interface{}, *mcpResponse) {
 	var rawArgs struct {
 		Queries       []string `json:"queries"`
@@ -484,37 +489,37 @@ func (h *Handler) handleMCPBatchSearch(r *http.Request, req mcpRequest, args jso
 		rawArgs.Queries = rawArgs.Queries[:4] // Blueprint §2.2: max 4 queries
 	}
 
-	type queryBucket struct {
-		Query    string      `json:"query"`
-		Response interface{} `json:"response"`
-	}
-
-	buckets := make([]queryBucket, len(rawArgs.Queries))
+	buckets := make([]batchQueryBucket, len(rawArgs.Queries))
 	var wg sync.WaitGroup
 
 	for i, q := range rawArgs.Queries {
 		wg.Add(1)
 		go func(idx int, queryStr string) {
 			defer wg.Done()
-			qArgs, _ := json.Marshal(model.SearchRequest{
-				Query:     queryStr,
-				Intent:    model.SearchIntent(rawArgs.Intent),
-				Mode:      model.SearchMode(rawArgs.Mode),
-				Freshness: rawArgs.Freshness,
-				Limit:     rawArgs.Num,
+			qArgs, _ := json.Marshal(map[string]interface{}{
+				"query":     queryStr,
+				"intent":    rawArgs.Intent,
+				"mode":      rawArgs.Mode,
+				"sources":   rawArgs.Sources,
+				"freshness": rawArgs.Freshness,
+				"num":       rawArgs.Num,
 			})
 			res, _ := h.handleMCPSearch(r, req, qArgs)
 			if resMap, ok := res.(map[string]interface{}); ok {
-				buckets[idx] = queryBucket{Query: queryStr, Response: resMap["structuredContent"]}
+				buckets[idx] = batchQueryBucket{Query: queryStr, Response: resMap["structuredContent"]}
 			}
 		}(i, q)
 	}
 	wg.Wait()
 
 	result := map[string]interface{}{
-		"count":   len(buckets),
-		"buckets": buckets,
+		"count": len(buckets),
 	}
+	if rawArgs.ReturnBuckets {
+		result["buckets"] = buckets
+	}
+	result["merged_results"] = mergeBatchBuckets(buckets, rawArgs.Num)
+
 
 	payload, _ := json.MarshalIndent(result, "", "  ")
 	return map[string]interface{}{
@@ -522,6 +527,59 @@ func (h *Handler) handleMCPBatchSearch(r *http.Request, req mcpRequest, args jso
 		"structuredContent": result,
 		"isError":           false,
 	}, nil
+}
+
+func mergeBatchBuckets(buckets []batchQueryBucket, limit int) []map[string]interface{} {
+	merged := map[string]map[string]interface{}{}
+	order := []string{}
+	for _, bucket := range buckets {
+		payload, ok := bucket.Response.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		var rawItems []interface{}
+		switch items := payload["results"].(type) {
+		case []interface{}:
+			rawItems = items
+		case []map[string]interface{}:
+			for _, item := range items {
+				rawItems = append(rawItems, item)
+			}
+		default:
+			continue
+		}
+		for _, rawItem := range rawItems {
+			item, ok := rawItem.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			rawURL, _ := item["url"].(string)
+			canonical := strings.TrimRight(strings.ToLower(strings.TrimSpace(rawURL)), "/")
+			if canonical == "" {
+				continue
+			}
+			if existing, found := merged[canonical]; found {
+				oldScore, _ := existing["score"].(float64)
+				newScore, _ := item["score"].(float64)
+				existing["score"] = oldScore + newScore
+				continue
+			}
+			clone := map[string]interface{}{}
+			for key, value := range item {
+				clone[key] = value
+			}
+			merged[canonical] = clone
+			order = append(order, canonical)
+		}
+	}
+	result := make([]map[string]interface{}, 0, len(order))
+	for _, key := range order {
+		result = append(result, merged[key])
+	}
+	if limit > 0 && len(result) > limit {
+		result = result[:limit]
+	}
+	return result
 }
 
 func (h *Handler) handleMCPStatus(r *http.Request, req mcpRequest) (interface{}, *mcpResponse) {
@@ -535,17 +593,34 @@ func (h *Handler) handleMCPStatus(r *http.Request, req mcpRequest) (interface{},
 		}
 	}
 
+	intentDefaults := []map[string]interface{}{
+		{"intent": "factual", "mode": "fast", "sources": []string{"brave"}, "freshness": nil, "why": "single fact lookup, low latency"},
+		{"intent": "status", "mode": "deep", "sources": []string{"brave", "tavily", "grok"}, "freshness": "pw", "why": "current status check"},
+		{"intent": "comparison", "mode": "deep", "sources": []string{"brave", "grok"}, "freshness": nil, "why": "multi-source comparison"},
+		{"intent": "tutorial", "mode": "deep", "sources": []string{"brave", "grok"}, "freshness": nil, "why": "official and authoritative pages"},
+		{"intent": "exploratory", "mode": "deep", "sources": []string{"brave", "grok"}, "freshness": nil, "why": "broad exploration"},
+		{"intent": "news", "mode": "deep", "sources": []string{"brave", "tavily", "grok"}, "freshness": "pw", "why": "recent news"},
+		{"intent": "resource", "mode": "deep", "sources": []string{"brave", "grok"}, "freshness": nil, "why": "resource finding and recall"},
+	}
+
 	statusMap := map[string]interface{}{
 		"server": "one-search-relay",
 		"version": "1.0.0-blueprint-v1",
 		"providers_available": provNames,
+		"provider_flags": map[string]bool{
+			"brave": providerEnabled(providers, model.ProviderBrave),
+			"tavily": providerEnabled(providers, model.ProviderTavily),
+			"tavily_url": providerEnabled(providers, model.ProviderTavily),
+			"exa": providerEnabled(providers, model.ProviderExa),
+			"grok": providerEnabled(providers, model.ProviderGrok),
+		},
 		"default_policy": map[string]interface{}{
 			"mode": "deep",
 			"sources": []string{"brave", "grok"},
 			"freshness": nil,
 			"why": "default: deep mode, brave+grok, no freshness — baseline policy",
 		},
-		"intent_defaults": []string{"factual", "status", "comparison", "tutorial", "exploratory", "news", "resource"},
+		"intent_defaults": intentDefaults,
 		"rrf_weights": map[string]float64{
 			"grok": 1.2,
 			"brave": 1.0,
@@ -553,6 +628,12 @@ func (h *Handler) handleMCPStatus(r *http.Request, req mcpRequest) (interface{},
 			"tavily": 0.6,
 		},
 		"domain_boost_multiplier": 1.5,
+		"grok_verifier": map[string]float64{"consistency_threshold": 0.7, "dead_threshold": 0.2},
+		"thick_fetch_threshold": nil,
+		"stale_score_multiplier": nil,
+		"output_formats": []string{"compact", "raw", "search_result"},
+		"freshness_windows": map[string]string{"pd": "24h", "pw": "7d", "pm": "30d", "py": "365d"},
+		"sources_param": map[string]string{"type": "comma-separated string", "default": "resolved by intent or default policy"},
 		"runtime_settings": settings,
 	}
 
@@ -818,6 +899,15 @@ func mcpBatchSearchToolSchema() map[string]interface{} {
 	}
 }
 
+func providerEnabled(providers []model.ProviderConfig, name string) bool {
+	for _, provider := range providers {
+		if provider.Name == name {
+			return provider.Enabled && provider.AvailableKeys > 0
+		}
+	}
+	return false
+}
+
 func mcpStatusToolSchema() map[string]interface{} {
 	return map[string]interface{}{
 		"name":        "status",
@@ -850,7 +940,7 @@ func mcpSearchToolSchema() map[string]interface{} {
 				"mode": map[string]interface{}{
 					"type":        "string",
 					"description": "Search mode. fast=low latency single source; deep=multi-source parallel+RRF; answer=AI answer with citations.",
-					"enum":        []string{string(model.SearchModeFast), string(model.SearchModeDeep), string(model.SearchModeAnswer), string(model.SearchModeParallel), string(model.SearchModeFallback), string(model.SearchModeSingle)},
+					"enum":        []string{string(model.SearchModeFast), string(model.SearchModeDeep), string(model.SearchModeAnswer)},
 				},
 				"sources": map[string]interface{}{
 					"type":        "string",

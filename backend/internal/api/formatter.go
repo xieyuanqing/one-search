@@ -43,6 +43,11 @@ func formatCompact(response model.SearchResponse, req model.SearchRequest) map[s
 			"score":  r.Score,
 			"source": r.Providers, // 多源标记
 		}
+		if len(r.Providers) > 0 {
+			item["provider"] = r.Providers[0]
+		} else if r.Provider != "" {
+			item["provider"] = r.Provider
+		}
 		if r.Snippet != "" {
 			item["content"] = r.Snippet // 蓝图 §7.2: snippet → content
 		}
@@ -62,6 +67,9 @@ func formatCompact(response model.SearchResponse, req model.SearchRequest) map[s
 		"query":  req.Query,
 		"count":  len(results),
 		"results": results,
+	}
+	if response.Answer != "" {
+		payload["answer"] = response.Answer
 	}
 
 	// resolved_policy 必须出现在顶层 [蓝图 §8 行为契约 6]

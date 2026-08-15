@@ -26,10 +26,18 @@ services:
       no_proxy: ${ONE_SEARCH_NO_PROXY:-localhost,127.0.0.1,::1}
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    networks:
+      - default
+      - new-api_default
     volumes:
       - postgres_data:/var/lib/postgresql/data
     ports:
-      - "${HOST_PORT:-5173}:80"
+      - "127.0.0.1:${HOST_PORT:-5173}:80"
+
+networks:
+  default:
+  new-api_default:
+    external: true
 
 volumes:
   postgres_data:

@@ -37,15 +37,29 @@
           </div>
           <div class="filters">
             <label class="chip on">
-              <span>模式</span>
-              <el-select v-model="form.mode" size="small" :disabled="!ready" class="chip-select mode-select">
-                <el-option value="fallback" label="转移" />
-                <el-option value="parallel" label="并发" />
-                <el-option value="single" label="单源" />
+              <span>意图</span>
+              <el-select v-model="form.intent" size="small" :disabled="!ready" class="chip-select intent-select">
+                <el-option value="" label="自动" />
+                <el-option value="factual" label="事实" />
+                <el-option value="status" label="状态" />
+                <el-option value="comparison" label="对比" />
+                <el-option value="tutorial" label="教程" />
+                <el-option value="exploratory" label="探索" />
+                <el-option value="news" label="新闻" />
+                <el-option value="resource" label="资源" />
               </el-select>
             </label>
             <label class="chip">
-              <span>平台</span>
+              <span>模式</span>
+              <el-select v-model="form.mode" size="small" :disabled="!ready" class="chip-select mode-select">
+                <el-option value="" label="按策略" />
+                <el-option value="fast" label="快速" />
+                <el-option value="deep" label="深度" />
+                <el-option value="answer" label="答案" />
+              </el-select>
+            </label>
+            <label class="chip">
+              <span>来源</span>
               <el-select
                 v-model="form.providers"
                 class="chip-select provider-select"
@@ -76,12 +90,34 @@
                 :disabled="!ready"
               />
             </label>
+            <label class="chip">
+              <span>时效</span>
+              <el-select v-model="form.freshness" size="small" :disabled="!ready" class="chip-select freshness-select">
+                <el-option value="" label="按策略" />
+                <el-option value="pd" label="24 小时" />
+                <el-option value="pw" label="一周" />
+                <el-option value="pm" label="一月" />
+                <el-option value="py" label="一年" />
+              </el-select>
+            </label>
           </div>
         </div>
       </template>
     </div>
 
     <div v-if="result" class="stage">
+      <section v-if="result.resolved_policy" class="policy-strip">
+        <div class="policy-summary">
+          <span class="policy-label">解析策略</span>
+          <strong>{{ policyName(result.resolved_policy.policy) }}</strong>
+          <span class="policy-why">{{ result.resolved_policy.why }}</span>
+        </div>
+        <div class="policy-dimensions">
+          <span>模式 · {{ result.resolved_policy.mode || result.resolved_policy.mode_policy }}</span>
+          <span>来源 · {{ result.resolved_policy.sources?.join(', ') || result.resolved_policy.source_policy }}</span>
+          <span>时效 · {{ result.resolved_policy.freshness || result.resolved_policy.freshness_policy }}</span>
+        </div>
+      </section>
       <div class="stats">
         <span class="pill"><b>{{ result.meta?.total_results || result.results.length }}</b> 条结果</span>
         <span class="pill">去重 <b>{{ result.meta?.deduped_results || 0 }}</b></span>
@@ -223,6 +259,17 @@ type SearchResponse = {
     deduped_results?: number
     latency_ms?: number
   }
+  resolved_policy?: {
+    policy: string
+    mode?: string
+    sources?: string[]
+    freshness?: string
+    domain_boost?: string
+    mode_policy: string
+    source_policy: string
+    freshness_policy: string
+    why: string
+  }
 }
 
 const loading = ref(false)
@@ -235,7 +282,9 @@ const providers = ref<ProviderConfig[]>([])
 const providerHealth = ref<ProviderHealth[]>([])
 const form = reactive({
   query: '',
-  mode: 'fallback',
+  intent: '',
+  mode: '',
+  freshness: '',
   providers: [] as string[],
   limit: 8,
   cache: 'default'
@@ -326,6 +375,13 @@ function resultProviderLabel(item: SearchResultItem, fallback = '未知渠道') 
   return providerLabel(item.provider || fallback)
 }
 
+function policyName(value: string) {
+  if (value === 'default') return '默认策略'
+  if (value === 'intent') return '意图策略'
+  if (value === 'mixed') return '混合策略'
+  return value || '未知策略'
+}
+
 function formatScore(value: number) {
   if (!Number.isFinite(value)) return '-'
   return Number.isInteger(value) ? String(value) : value.toFixed(2)
@@ -398,9 +454,7 @@ async function loadMeta() {
       return (health?.available_keys ?? item.available_keys ?? 0) > 0
     })
     ready.value = readyProviders.length > 0
-    const preferred = settings?.default_providers?.filter((name) => readyProviders.some((item) => item.name === name)) || []
-    form.providers = preferred.length ? preferred : readyProviders.map((item) => item.name)
-    if (settings?.default_mode) form.mode = settings.default_mode
+    form.providers = []
     if (settings?.default_limit) form.limit = settings.default_limit
   } catch (error) {
     ready.value = false
@@ -422,12 +476,16 @@ async function run() {
   loading.value = true
   openResultKeys.value = []
   try {
-    result.value = await api.playgroundSearch({
+    const payload: Record<string, unknown> = {
       query: form.query,
-      mode: form.mode,
-      providers: form.providers,
-      limit: form.limit
-    }) as SearchResponse
+      limit: form.limit,
+      debug: true
+    }
+    if (form.intent) payload.intent = form.intent
+    if (form.mode) payload.mode = form.mode
+    if (form.freshness) payload.freshness = form.freshness
+    if (form.providers.length) payload.providers = form.providers
+    result.value = await api.playgroundSearch(payload) as SearchResponse
     await nextTick()
     resultListEl.value?.scrollTo({ top: 0 })
   } catch (error) {
@@ -611,7 +669,9 @@ onMounted(loadMeta)
   min-height: 28px;
   padding: 0 4px 0 0;
 }
+.intent-select { width: 86px; }
 .mode-select { width: 84px; }
+.freshness-select { width: 92px; }
 .provider-select { min-width: 140px; max-width: 220px; }
 .chip-number { width: 96px; }
 .chip-number :deep(.el-input__wrapper) {
@@ -628,6 +688,30 @@ onMounted(loadMeta)
   display: flex;
   flex-direction: column;
   animation: rise .45s .12s ease both;
+}
+.policy-strip {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border-left: 3px solid var(--primary);
+  background: #f7faf9;
+  font-size: 12px;
+  color: #475467;
+}
+.policy-summary { min-width: 0; }
+.policy-label { margin-right: 8px; color: var(--muted); }
+.policy-summary strong { margin-right: 10px; color: var(--primary-ink); }
+.policy-why { color: #667085; }
+.policy-dimensions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px 12px;
+  flex: 0 0 auto;
+  font-family: var(--mono);
 }
 .stats {
   display: flex;

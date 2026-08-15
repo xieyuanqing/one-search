@@ -140,6 +140,10 @@ func resolvePolicy(req model.SearchRequest) (policyDimensions, *model.ResolvedPo
 
 	policy := &model.ResolvedPolicy{
 		Policy:          classifyPolicy(modePol, sourcePol, freshPol),
+		Mode:            dim.mode,
+		Sources:         append([]string(nil), dim.sources...),
+		Freshness:       dim.freshness,
+		DomainBoost:     req.DomainBoost,
 		ModePolicy:      modePol,
 		SourcePolicy:    sourcePol,
 		FreshnessPolicy: freshPol,

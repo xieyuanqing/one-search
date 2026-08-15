@@ -133,8 +133,8 @@ func (s *Store) FindAdminAPIKey(ctx context.Context, token string) (model.AdminA
 
 func (s *Store) RuntimeSettings(ctx context.Context) (model.RuntimeSettings, error) {
 	settings := model.RuntimeSettings{
-		DefaultMode:                 model.SearchModeParallel,
-		DefaultProviders:            append([]string(nil), model.DefaultProviders...),
+		DefaultMode:                 model.SearchModeDeep,
+		DefaultProviders:            []string{model.ProviderBrave, model.ProviderGrok},
 		DefaultLimit:                10,
 		DefaultDedupe:               true,
 		RequestTimeoutMS:            20000,
@@ -171,6 +171,8 @@ func (s *Store) RuntimeSettings(ctx context.Context) (model.RuntimeSettings, err
 }
 
 func (s *Store) UpdateRuntimeSettings(ctx context.Context, settings model.RuntimeSettings) error {
+	settings.DefaultMode = model.SearchModeDeep
+	settings.DefaultProviders = []string{model.ProviderBrave, model.ProviderGrok}
 	if settings.ProviderHealthWindowMinutes <= 0 {
 		settings.ProviderHealthWindowMinutes = 15
 	}

@@ -26,6 +26,9 @@ func (p *TavilyProvider) Search(ctx context.Context, req model.SearchRequest, ke
 		"max_results":   requestLimit(req.Limit, 10, 20),
 		"include_usage": true,
 	}
+	if req.Mode == model.SearchModeAnswer {
+		body["include_answer"] = "advanced"
+	}
 	if searchDepth := optionString(req.Options, "search_depth"); searchDepth != "" {
 		body["search_depth"] = searchDepth
 	}
@@ -61,6 +64,9 @@ func (p *TavilyProvider) Search(ctx context.Context, req model.SearchRequest, ke
 		return model.ProviderResponse{}, err
 	}
 	results := normalizeTavilyResults(payload, req.IncludeRaw)
+	if answer := stringValue(payload, "answer"); answer != "" {
+		payload["answer"] = answer
+	}
 	return model.ProviderResponse{Results: results, Usage: usageMeasurements(model.ProviderTavily, payload), Raw: payload}, nil
 }
 

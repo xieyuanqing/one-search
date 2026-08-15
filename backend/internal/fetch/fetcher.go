@@ -84,26 +84,27 @@ func (f *Fetcher) Fetch(ctx context.Context, req model.FetchRequest) model.Fetch
 	var extractor string
 	var err error
 
-	// If direct raw github or json url rewritten, fetch directly
+	// Rewritten URLs are fetched directly; normal URLs follow the selected pipeline.
 	if rewriteAttempt.Applied {
 		logs = append(logs, fmt.Sprintf("url_rewritten: %s -> %s (%s)", req.URL, fetchURL, rewriteAttempt.Reason))
-		rawContent, extractor, err = f.fetchDirect(ctx, fetchURL, &traces)
+		if !req.RemoteFirst {
+			rawContent, extractor, err = f.fetchDirect(ctx, fetchURL, &traces)
+		}
 	}
 
-	// Fallback pipeline: markdown.new -> Jina Reader
-	if err != nil || !rewriteAttempt.Applied {
-		if req.RemoteFirst || true {
-			// Step 1: try markdown.new
-			rawContent, extractor, err = f.fetchMarkdownNew(ctx, fetchURL, &traces)
-			if err != nil || rawContent == "" {
-				logs = append(logs, fmt.Sprintf("markdown_new_failed: %v, falling back to jina reader", err))
-				// Step 2: fallback to Jina Reader (r.jina.ai)
-				rawContent, extractor, err = f.fetchJinaReader(ctx, fetchURL, &traces)
-				if err != nil {
-					logs = append(logs, fmt.Sprintf("jina_reader_failed: %v", err))
-				}
-			}
+	// remote_first=true 使用 markdown.new -> Jina；false 使用本机直连。
+	if req.RemoteFirst {
+		// Step 1: try markdown.new
+		rawContent, extractor, err = f.fetchMarkdownNew(ctx, fetchURL, &traces)
+		if err != nil || rawContent == "" {
+			logs = append(logs, fmt.Sprintf("markdown_new_failed: %v, falling back to jina reader", err))
+			rawContent, extractor, err = f.fetchJinaReader(ctx, fetchURL, &traces)
+		if err != nil {
+			logs = append(logs, fmt.Sprintf("jina_reader_failed: %v", err))
 		}
+		}
+	} else {
+		rawContent, extractor, err = f.fetchDirect(ctx, fetchURL, &traces)
 	}
 
 	if err != nil && rawContent == "" {
