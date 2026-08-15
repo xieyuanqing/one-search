@@ -3,23 +3,27 @@ package provider
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/one-search/one-search/backend/internal/model"
 )
 
-const grokDefaultModel = "grok-4.5"
+const (
+	grokDefaultModel = "grok-4.3"
+	grokDeepModel    = "grok-4.5"
+)
 
-const grokSearchPrompt = `你是一个联网搜索助手。请使用 web_search 工具搜索用户的问题，然后返回搜索结果。
+const grokSearchPrompt = `Use web search as needed.
 
-严格要求：
-- 只输出一个合法的 JSON 数组，不要任何多余文字、不要 markdown 代码块。
-- 每个元素格式：{"title": 网页标题, "url": 网页链接, "snippet": 该网页的核心内容摘要(50字以内)}
-- 至少返回 5 条结果，最多 %d 条。
-- url 必须是真实搜索到的网页链接，不要编造。
-- snippet 用中文摘要（如果原网页是英文，翻译成中文摘要）。`
+Return only a valid JSON array. Do not output markdown or commentary outside the JSON array.
+Each item must contain exactly these fields:
+{"title":"source title","url":"real source URL","snippet":"faithful short summary of the source"}
+
+The URL must come from an actual search result.
+Keep each snippet faithful to its source and preserve the source language unless translation is necessary for clarity.
+Do not invent facts, URLs, titles, or dates.
+Return the most useful sources you found; do not search for or return a fixed number of results.`
 
 type GrokProvider struct {
 	*HTTPProvider
@@ -37,11 +41,15 @@ func (p *GrokProvider) Search(ctx context.Context, req model.SearchRequest, key 
 	limit := requestLimit(req.Limit, 10, 20)
 	grokModel := optionString(req.Options, "model", "grok_model")
 	if grokModel == "" {
-		grokModel = grokDefaultModel
+		switch req.Intent {
+		case model.IntentNews, model.IntentStatus:
+			grokModel = grokDeepModel
+		default:
+			grokModel = grokDefaultModel
+		}
 	}
 
-	prompt := fmt.Sprintf(grokSearchPrompt, limit)
-	input := fmt.Sprintf("搜索问题：%s", req.Query)
+	input := req.Query
 
 	body := map[string]interface{}{
 		"model": grokModel,
@@ -49,7 +57,7 @@ func (p *GrokProvider) Search(ctx context.Context, req model.SearchRequest, key 
 		"tools": []map[string]interface{}{
 			{"type": "web_search_preview"},
 		},
-		"instructions": prompt,
+		"instructions": grokSearchPrompt,
 	}
 
 	request, err := p.newJSONRequest(ctx, http.MethodPost, "/v1/responses", body)

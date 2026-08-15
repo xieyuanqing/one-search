@@ -65,6 +65,10 @@
             <span>命中 domain_boost 后分数 × 1.5</span>
           </div>
           <div class="detail-block">
+            <strong>Grok 模型路由</strong>
+            <span>常规查询使用 grok-4.3 · news / status 使用 grok-4.5 · 显式 model 可覆盖</span>
+          </div>
+          <div class="detail-block">
             <strong>Verifier</strong>
             <span>consistency ≥ 0.7 保留为 verified · 确定性 404/410 才判 dead</span>
           </div>
