@@ -65,8 +65,8 @@
             <span>命中 domain_boost 后分数 × 1.5</span>
           </div>
           <div class="detail-block">
-            <strong>Grok 模型路由</strong>
-            <span>常规查询使用 grok-4.3 · news / status 使用 grok-4.5 · 显式 model 可覆盖</span>
+            <strong>Grok 模型</strong>
+            <span>所有策略默认使用 grok-4.3 · 显式 model / grok_model 可按次覆盖</span>
           </div>
           <div class="detail-block">
             <strong>Verifier</strong>

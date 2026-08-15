@@ -9,10 +9,7 @@ import (
 	"github.com/one-search/one-search/backend/internal/model"
 )
 
-const (
-	grokDefaultModel = "grok-4.3"
-	grokDeepModel    = "grok-4.5"
-)
+const grokDefaultModel = "grok-4.3"
 
 const grokSearchPrompt = `Use web search as needed.
 
@@ -41,12 +38,7 @@ func (p *GrokProvider) Search(ctx context.Context, req model.SearchRequest, key 
 	limit := requestLimit(req.Limit, 10, 20)
 	grokModel := optionString(req.Options, "model", "grok_model")
 	if grokModel == "" {
-		switch req.Intent {
-		case model.IntentNews, model.IntentStatus:
-			grokModel = grokDeepModel
-		default:
-			grokModel = grokDefaultModel
-		}
+		grokModel = grokDefaultModel
 	}
 
 	input := req.Query
