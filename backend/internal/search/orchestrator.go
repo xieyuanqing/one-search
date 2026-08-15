@@ -65,11 +65,53 @@ func (o *Orchestrator) Search(ctx context.Context, req model.SearchRequest, requ
 	if err != nil {
 		return model.SearchResponse{}, err
 	}
+
+	// 蓝图复刻:策略解析层 — resolvePolicy [蓝图 §3]
+	dim, resolvedPolicy := resolvePolicy(req)
+
+	// 按维度覆盖:只有未显式覆盖的维度才用策略层推导的值
+	if !req.ProvidersExplicit || len(req.Providers) == 0 {
+		req.Providers = dim.sources
+		req.ProvidersExplicit = false
+	}
+	if !req.ModeExplicit && req.Mode == "" {
+		req.Mode = dim.mode
+	}
+	if !req.FreshnessExplicit && req.Freshness == "" && dim.freshness != "" {
+		req.Freshness = dim.freshness
+	}
+
+	// CJK 路由 [蓝图 §9-P1-4]
+	if !req.ProvidersExplicit {
+		// 在 applyDefaults 之前检测 CJK 并调整 sources
+	}
+
 	req = applyDefaults(req, settings)
 	if !req.ProvidersExplicit {
 		req.Providers = routeProviders(req.Providers, providerConfigs, settings.ProviderRoutingStrategy)
 	}
 	req.Providers = filterEnabledProviders(req.Providers, providerConfigs)
+
+	// 蓝图复刻:mode=answer 强制 sources=["tavily"] [蓝图 §3.3]
+	if req.Mode == model.SearchModeAnswer {
+		req.Providers = []string{model.ProviderTavily}
+	}
+
+	// CJK 路由:Tavily 优先 [蓝图 §9-P1-4]
+	if detectCJK(req.Query) && req.Mode != model.SearchModeFast && req.Mode != model.SearchModeAnswer {
+		hasTavily := false
+		for _, p := range req.Providers {
+			if p == model.ProviderTavily {
+				hasTavily = true
+				break
+			}
+		}
+		if !hasTavily {
+			// CJK 查询且非 fast:把 tavily 加到 sources
+			req.Providers = append([]string{model.ProviderTavily}, req.Providers...)
+		}
+	}
+
 	providerConfigByName := providerConfigMap(providerConfigs)
 	providerSettings := providerSettingsFromProviders(providerConfigs)
 	providerLimits := providerResultLimits(providerSettings)
@@ -98,6 +140,7 @@ func (o *Orchestrator) Search(ctx context.Context, req model.SearchRequest, requ
 				cached.Meta.RequestID = requestID
 				cached.Meta.LatencyMS = time.Since(started).Milliseconds()
 				cached.Meta.CacheKey = cacheKey
+				cached.ResolvedPolicy = resolvedPolicy
 				requestJSON, _ := json.Marshal(req)
 				responseJSON, _ := json.Marshal(cached)
 				_ = o.store.RecordSearchLog(context.Background(), model.SearchLogInput{
@@ -121,7 +164,7 @@ func (o *Orchestrator) Search(ctx context.Context, req model.SearchRequest, requ
 	}
 
 	run := func(runCtx context.Context) (searchOutcome, error) {
-		return o.executeSearch(runCtx, req, cacheKey, cacheWrite, settings, providerConfigByName, providerLimits, keyRetryCounts, providerTimeouts, providerProxies, providerRetryableErrors)
+		return o.executeSearch(runCtx, req, cacheKey, cacheWrite, settings, providerConfigByName, providerLimits, keyRetryCounts, providerTimeouts, providerProxies, providerRetryableErrors, resolvedPolicy)
 	}
 
 	var outcome searchOutcome
@@ -152,6 +195,16 @@ func (o *Orchestrator) Search(ctx context.Context, req model.SearchRequest, requ
 	response.Meta.LatencyMS = time.Since(started).Milliseconds()
 	response.Meta.CacheHit = false
 	response.Meta.CacheKey = cacheKey
+	response.ResolvedPolicy = resolvedPolicy
+
+	// debug 模式 [蓝图 §2.1 debug 参数]
+	if req.Debug {
+		debug := &model.SearchDebug{
+			Policy: resolvedPolicy,
+			Latency: outcome.latencies,
+		}
+		response.Debug = debug
+	}
 
 	requestJSON, _ := json.Marshal(req)
 	responseJSON, _ := json.Marshal(responseLogPayload(response, outcome.providerResults))
@@ -180,6 +233,7 @@ type searchOutcome struct {
 	providerResults []providerExecution
 	status          string
 	errorMessage    string
+	latencies       map[string]int64
 }
 
 func (o *Orchestrator) executeSearch(
@@ -193,25 +247,38 @@ func (o *Orchestrator) executeSearch(
 	keyRetryCounts map[string]int,
 	providerTimeouts map[string]int,
 	providerProxies map[string]string,
-	providerRetryableErrors map[string]map[string]bool,
+	retryableErrors map[string]map[string]bool,
+	resolvedPolicy *model.ResolvedPolicy,
 ) (searchOutcome, error) {
 	var providerResults []providerExecution
 	switch req.Mode {
-	case model.SearchModeFallback:
-		providerResults = o.searchFallback(ctx, req, providerConfigByName, providerLimits, keyRetryCounts, providerTimeouts, providerProxies, providerRetryableErrors)
-	case model.SearchModeSingle:
-		providerResults = o.searchSingle(ctx, req, providerConfigByName, providerLimits, keyRetryCounts, providerTimeouts, providerProxies, providerRetryableErrors)
-	default:
-		providerResults = o.searchParallel(ctx, req, providerConfigByName, providerLimits, keyRetryCounts, providerTimeouts, providerProxies, providerRetryableErrors)
+	case model.SearchModeFallback, model.SearchModeDeep:
+		// deep 模式按 fallback 语义:但实际我们用 parallel + RRF 融合更合理
+		// 蓝图 deep = 并发多源 + RRF 融合,不是 fallback
+		providerResults = o.searchParallel(ctx, req, providerConfigByName, providerLimits, keyRetryCounts, providerTimeouts, providerProxies, retryableErrors)
+	case model.SearchModeSingle, model.SearchModeFast:
+		providerResults = o.searchSingle(ctx, req, providerConfigByName, providerLimits, keyRetryCounts, providerTimeouts, providerProxies, retryableErrors)
+	case model.SearchModeAnswer:
+		providerResults = o.searchSingle(ctx, req, providerConfigByName, providerLimits, keyRetryCounts, providerTimeouts, providerProxies, retryableErrors)
+	default: // parallel
+		providerResults = o.searchParallel(ctx, req, providerConfigByName, providerLimits, keyRetryCounts, providerTimeouts, providerProxies, retryableErrors)
 	}
 
-	results, deduped := mergeResults(providerResults, req)
+	// 蓝图复刻:用加权 RRF 融合替代原来的简单 mergeResults
+	results, deduped, warnings := mergeWithRRF(providerResults, req)
 	status := "success"
 	errorMessage := ""
 	if len(results) == 0 && hasOnlyErrors(providerResults) {
 		status = "error"
 		errorMessage = firstError(providerResults)
 	}
+
+	// 收集各源延迟
+	latencies := map[string]int64{}
+	for _, exec := range providerResults {
+		latencies[exec.provider] = exec.latencyMS
+	}
+
 	response := model.SearchResponse{
 		Results:   results,
 		Providers: summaries(providerResults),
@@ -223,6 +290,7 @@ func (o *Orchestrator) executeSearch(
 			CacheHit:         false,
 			CacheKey:         cacheKey,
 			ProvidersQueried: providersQueried(providerResults),
+			Warnings:         warnings,
 		},
 	}
 	if cacheWrite && shouldWriteSearchCache(req.Mode, status, providerResults) {
@@ -231,7 +299,7 @@ func (o *Orchestrator) executeSearch(
 			_ = o.store.SetCache(context.Background(), cacheKey, payload, cacheTTLSeconds(settings.CacheTTLSeconds, len(toStore.Results)))
 		}
 	}
-	return searchOutcome{response: response, providerResults: providerResults, status: status, errorMessage: errorMessage}, nil
+	return searchOutcome{response: response, providerResults: providerResults, status: status, errorMessage: errorMessage, latencies: latencies}, nil
 }
 
 func detachContext(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -246,7 +314,7 @@ func shouldWriteSearchCache(mode model.SearchMode, status string, executions []p
 		return false
 	}
 	switch mode {
-	case model.SearchModeFallback, model.SearchModeSingle:
+	case model.SearchModeFallback, model.SearchModeDeep, model.SearchModeSingle, model.SearchModeFast, model.SearchModeAnswer:
 		for _, execution := range executions {
 			if execution.err == nil {
 				return true

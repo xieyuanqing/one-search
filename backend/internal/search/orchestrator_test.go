@@ -136,7 +136,8 @@ func TestSearchSkipsDisabledDefaultProviders(t *testing.T) {
 	keyPool := &orchestratorTestKeyPool{}
 	orchestrator := newDisabledProviderTestOrchestrator(keyPool)
 
-	response, err := orchestrator.Search(context.Background(), model.SearchRequest{Query: "golang"}, "request-id", 0)
+	// 显式指定 providers(跳过策略层 default_policy),disabled 的 exa 应被过滤
+	response, err := orchestrator.Search(context.Background(), model.SearchRequest{Query: "golang", Providers: []string{model.ProviderExa, model.ProviderSerper}, ProvidersExplicit: true, Mode: model.SearchModeParallel}, "request-id", 0)
 	if err != nil {
 		t.Fatalf("Search returned error: %v", err)
 	}
@@ -413,7 +414,8 @@ func TestSearchProviderTimeoutCanExceedRuntimeTimeout(t *testing.T) {
 	}
 	orchestrator := NewOrchestrator(registry, keyPool, store)
 
-	response, err := orchestrator.Search(context.Background(), model.SearchRequest{Query: "golang"}, "request-id", 0)
+	// 显式指定 mode=single 和 providers,避免策略层 default_policy 接管
+	response, err := orchestrator.Search(context.Background(), model.SearchRequest{Query: "golang", Providers: []string{model.ProviderFirecrawl}, ProvidersExplicit: true, Mode: model.SearchModeSingle}, "request-id", 0)
 	if err != nil {
 		t.Fatalf("Search returned error: %v", err)
 	}

@@ -73,8 +73,8 @@ func (h *Handler) mcpInfo(w http.ResponseWriter, r *http.Request) {
 		"protocol_version":            mcpLatestProtocolVersion,
 		"supported_protocol_versions": mcpSupportedProtocolVersions,
 		"endpoint":                    r.URL.Path,
-		"auth":                        "Authorization: Bearer <osr_...|oak_...> or X-API-Key",
-		"tools":                       []string{"search"},
+		"auth":                        "Authorization: Bearer *** or X-API-Key",
+		"tools":                       []string{"search", "batch_search", "fetch", "fetch_many", "search_and_fetch", "status"},
 	})
 }
 
@@ -170,7 +170,7 @@ func (h *Handler) handleMCPRequest(r *http.Request, req mcpRequest) (mcpResponse
 	case "ping":
 		return newMCPResult(req.ID, map[string]interface{}{}), true
 	case "tools/list":
-		return newMCPResult(req.ID, map[string]interface{}{"tools": []interface{}{mcpSearchToolSchema()}}), true
+		return newMCPResult(req.ID, map[string]interface{}{"tools": mcpAllToolSchemas()}), true
 	case "tools/call":
 		result, errResp := h.handleMCPToolCall(r, req)
 		if errResp != nil {
@@ -210,6 +210,14 @@ func (h *Handler) handleMCPToolCall(r *http.Request, req mcpRequest) (interface{
 		return nil, mcpInvalidParams(req.ID, "unknown tool: "+params.Name)
 	}
 
+	// 蓝图复刻:解析蓝图参数面 — sources(逗号分隔字符串), num, intent, mode, domain_boost, debug 等
+	var rawArgs map[string]interface{}
+	if len(params.Arguments) > 0 {
+		if err := json.Unmarshal(params.Arguments, &rawArgs); err != nil {
+			return nil, mcpInvalidParams(req.ID, "invalid search arguments")
+		}
+	}
+
 	var searchReq model.SearchRequest
 	if len(params.Arguments) > 0 {
 		if err := json.Unmarshal(params.Arguments, &searchReq); err != nil {
@@ -220,8 +228,75 @@ func (h *Handler) handleMCPToolCall(r *http.Request, req mcpRequest) (interface{
 	if searchReq.Query == "" {
 		return nil, mcpInvalidParams(req.ID, "query is required")
 	}
-	searchReq.LimitExplicit = hasJSONField(params.Arguments, "limit")
-	searchReq.ProvidersExplicit = hasJSONField(params.Arguments, "providers")
+
+	// 蓝图参数映射:sources(逗号分隔) → Providers
+	if sourcesStr, ok := rawArgs["sources"].(string); ok && sourcesStr != "" {
+		parts := strings.Split(sourcesStr, ",")
+		providers := []string{}
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				providers = append(providers, p)
+			}
+		}
+		if len(providers) > 0 {
+			searchReq.Providers = providers
+			searchReq.ProvidersExplicit = true
+		}
+	} else if len(searchReq.Providers) > 0 {
+		searchReq.ProvidersExplicit = hasJSONField(params.Arguments, "providers") || hasJSONField(params.Arguments, "sources")
+	}
+
+	// num → Limit [蓝图 §2.1: num 是 RRF 融合后的最终总结果数]
+	if num, ok := rawArgs["num"].(float64); ok && num > 0 {
+		searchReq.Limit = int(num)
+		searchReq.LimitExplicit = true
+	} else if !hasJSONField(params.Arguments, "limit") && !hasJSONField(params.Arguments, "num") {
+		searchReq.LimitExplicit = false
+	} else {
+		searchReq.LimitExplicit = hasJSONField(params.Arguments, "limit") || hasJSONField(params.Arguments, "num")
+	}
+
+	// mode 显式标记
+	if modeStr, ok := rawArgs["mode"].(string); ok && modeStr != "" {
+		searchReq.Mode = model.SearchMode(modeStr)
+		searchReq.ModeExplicit = true
+	}
+
+	// freshness 显式标记
+	if freshStr, ok := rawArgs["freshness"].(string); ok && freshStr != "" {
+		searchReq.Freshness = freshStr
+		searchReq.FreshnessExplicit = true
+	}
+
+	// intent
+	if intentStr, ok := rawArgs["intent"].(string); ok && intentStr != "" {
+		searchReq.Intent = model.SearchIntent(intentStr)
+	}
+
+	// domain_boost
+	if boostStr, ok := rawArgs["domain_boost"].(string); ok {
+		searchReq.DomainBoost = boostStr
+	}
+
+	// snippet_chars / content_chars
+	if sc, ok := rawArgs["snippet_chars"].(float64); ok {
+		searchReq.SnippetChars = int(sc)
+	}
+	if cc, ok := rawArgs["content_chars"].(float64); ok {
+		searchReq.ContentChars = int(cc)
+	}
+
+	// response_format
+	if rf, ok := rawArgs["response_format"].(string); ok && rf != "" {
+		searchReq.ResponseFormat = model.ResponseFormat(rf)
+	}
+
+	// debug
+	if dbg, ok := rawArgs["debug"].(bool); ok {
+		searchReq.Debug = dbg
+	}
+
 	searchReq.CompatFormat = model.CompatFormatNative
 	if searchReq.Options == nil {
 		searchReq.Options = map[string]interface{}{}
@@ -240,13 +315,16 @@ func (h *Handler) handleMCPToolCall(r *http.Request, req mcpRequest) (interface{
 	if err != nil {
 		return mcpToolError(err.Error()), nil
 	}
-	payload, err := json.MarshalIndent(response, "", "  ")
+
+	// 蓝图复刻:格式化层 [蓝图 §7] — compact(默认)/ raw / search_result
+	formatted := formatSearchResponse(response, searchReq)
+	payload, err := json.MarshalIndent(formatted, "", "  ")
 	if err != nil {
 		return mcpToolError(err.Error()), nil
 	}
 	return map[string]interface{}{
 		"content":           []mcpContent{{Type: "text", Text: string(payload)}},
-		"structuredContent": response,
+		"structuredContent": formatted,
 		"isError":           false,
 	}, nil
 }
@@ -335,50 +413,74 @@ func negotiateMCPProtocolVersion(params json.RawMessage) string {
 	return mcpDefaultProtocolVersion
 }
 
+func mcpAllToolSchemas() []interface{} {
+	// 蓝图复刻:六个工具。当前阶段已实现 search,其余后续阶段补齐。
+	return []interface{}{
+		mcpSearchToolSchema(),
+	}
+}
+
 func mcpSearchToolSchema() map[string]interface{} {
 	return map[string]interface{}{
-		"name":        "search",
-		"title":       "One Search",
-		"description": "Search the web through configured One Search Relay providers.",
+		"name":  "search",
+		"title": "One Search",
+		"description": "Search the web through configured providers with intent-driven policy, weighted RRF fusion, and optional verification.",
 		"inputSchema": map[string]interface{}{
 			"type": "object",
 			"properties": map[string]interface{}{
 				"query": map[string]interface{}{
 					"type":        "string",
-					"description": "Search query.",
+					"description": "Search query. Recommended ≤8 words.",
 				},
-				"providers": map[string]interface{}{
-					"type":        "array",
-					"description": "Optional providers to use. Defaults to runtime settings.",
-					"items":       map[string]interface{}{"type": "string", "enum": model.DefaultProviders},
+				"intent": map[string]interface{}{
+					"type":        "string",
+					"description": "Search intent. Drives mode/sources/freshness automatically.",
+					"enum":        []string{string(model.IntentFactual), string(model.IntentStatus), string(model.IntentComparison), string(model.IntentTutorial), string(model.IntentExploratory), string(model.IntentNews), string(model.IntentResource)},
 				},
 				"mode": map[string]interface{}{
 					"type":        "string",
-					"description": "Search mode.",
-					"enum":        []string{string(model.SearchModeParallel), string(model.SearchModeFallback), string(model.SearchModeSingle)},
+					"description": "Search mode. fast=low latency single source; deep=multi-source parallel+RRF; answer=AI answer with citations.",
+					"enum":        []string{string(model.SearchModeFast), string(model.SearchModeDeep), string(model.SearchModeAnswer), string(model.SearchModeParallel), string(model.SearchModeFallback), string(model.SearchModeSingle)},
 				},
-				"limit": map[string]interface{}{
+				"sources": map[string]interface{}{
+					"type":        "string",
+					"description": "Comma-separated providers, e.g. \"brave,exa\". Overrides intent-derived sources.",
+				},
+				"num": map[string]interface{}{
 					"type":        "integer",
-					"description": "Maximum results, capped at 50.",
+					"description": "Total results after RRF fusion. Default 10, max 50.",
 					"minimum":     1,
 					"maximum":     50,
 				},
 				"freshness": map[string]interface{}{
 					"type":        "string",
-					"description": "Optional freshness hint.",
+					"description": "Freshness filter: pd(24h), pw(week), pm(month), py(year).",
+					"enum":        []string{"pd", "pw", "pm", "py"},
 				},
-				"dedupe": map[string]interface{}{
-					"type":        "boolean",
-					"description": "Whether to deduplicate results by URL.",
-				},
-				"cache": map[string]interface{}{
+				"domain_boost": map[string]interface{}{
 					"type":        "string",
-					"description": "Cache policy.",
-					"enum":        []string{string(model.CachePolicyDefault), string(model.CachePolicyBypass), string(model.CachePolicyRefresh)},
+					"description": "Domain to boost (1.5× score multiplier).",
+				},
+				"snippet_chars": map[string]interface{}{
+					"type":        "integer",
+					"description": "Max snippet chars. Default 1000.",
+				},
+				"content_chars": map[string]interface{}{
+					"type":        "integer",
+					"description": "Max content chars. Default 4000.",
+				},
+				"response_format": map[string]interface{}{
+					"type":        "string",
+					"description": "Output format: compact (default), raw (full payload), search_result.",
+					"enum":        []string{string(model.FormatCompact), string(model.FormatRaw), string(model.FormatSearchResult)},
+				},
+				"debug": map[string]interface{}{
+					"type":        "boolean",
+					"description": "Return resolved_policy, per-source latency, verify_trace.",
 				},
 				"include_raw": map[string]interface{}{
 					"type":        "boolean",
-					"description": "Whether to include raw upstream result items.",
+					"description": "Include raw upstream result items.",
 				},
 			},
 			"required": []string{"query"},

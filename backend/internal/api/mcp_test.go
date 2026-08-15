@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/one-search/one-search/backend/internal/model"
 )
 
 func TestMCPStreamableHTTPHandshakeAndListTools(t *testing.T) {
@@ -99,21 +98,17 @@ func TestMCPStreamableHTTPHandshakeAndListTools(t *testing.T) {
 	if !ok {
 		t.Fatalf("tool properties missing: %+v", tool.InputSchema)
 	}
-	providers, ok := properties["providers"].(map[string]interface{})
+	sources, ok := properties["sources"].(map[string]interface{})
 	if !ok {
-		t.Fatalf("providers schema missing: %+v", properties)
+		t.Fatalf("sources schema missing: %+v", properties)
 	}
-	items, ok := providers["items"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("providers items schema missing: %+v", providers)
+	if sources["type"] != "string" {
+		t.Fatalf("sources schema type = %v, want string", sources["type"])
 	}
-	enumValues, ok := items["enum"].([]interface{})
-	if !ok || len(enumValues) != len(model.DefaultProviders) {
-		t.Fatalf("unexpected providers enum: %+v", items["enum"])
-	}
-	for index, provider := range model.DefaultProviders {
-		if enumValues[index] != provider {
-			t.Fatalf("providers enum[%d] = %v, want %s", index, enumValues[index], provider)
+	// intent / mode / num 等蓝图参数应在 schema 中
+	for _, key := range []string{"intent", "mode", "num", "freshness", "domain_boost", "debug"} {
+		if _, ok := properties[key]; !ok {
+			t.Fatalf("schema missing key %q: %+v", key, properties)
 		}
 	}
 }

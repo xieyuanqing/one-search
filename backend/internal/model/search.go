@@ -21,6 +21,10 @@ const (
 	SearchModeParallel SearchMode = "parallel"
 	SearchModeFallback SearchMode = "fallback"
 	SearchModeSingle   SearchMode = "single"
+	// 蓝图复刻:fast/deep/answer
+	SearchModeFast   SearchMode = "fast"
+	SearchModeDeep   SearchMode = "deep"
+	SearchModeAnswer SearchMode = "answer"
 )
 
 type CachePolicy string
@@ -40,26 +44,82 @@ const (
 	CompatFormatOpenAI CompatFormat = "openai"
 )
 
+type SearchIntent string
+
+const (
+	IntentFactual      SearchIntent = "factual"
+	IntentStatus       SearchIntent = "status"
+	IntentComparison   SearchIntent = "comparison"
+	IntentTutorial     SearchIntent = "tutorial"
+	IntentExploratory  SearchIntent = "exploratory"
+	IntentNews         SearchIntent = "news"
+	IntentResource     SearchIntent = "resource"
+)
+
+type ResponseFormat string
+
+const (
+	FormatCompact      ResponseFormat = "compact"
+	FormatRaw          ResponseFormat = "raw"
+	FormatSearchResult ResponseFormat = "search_result"
+)
+
 type SearchRequest struct {
 	Query             string                 `json:"query"`
 	Providers         []string               `json:"providers,omitempty"`
 	ProvidersExplicit bool                   `json:"-"`
 	Mode              SearchMode             `json:"mode,omitempty"`
+	ModeExplicit      bool                   `json:"-"`
+	Intent            SearchIntent           `json:"intent,omitempty"`
 	Limit             int                    `json:"limit,omitempty"`
 	LimitExplicit     bool                   `json:"-"`
 	Freshness         string                 `json:"freshness,omitempty"`
+	FreshnessExplicit bool                   `json:"-"`
 	Dedupe            *bool                  `json:"dedupe,omitempty"`
 	Rerank            bool                   `json:"rerank,omitempty"`
 	Cache             CachePolicy            `json:"cache,omitempty"`
 	IncludeRaw        bool                   `json:"include_raw,omitempty"`
 	CompatFormat      CompatFormat           `json:"-"`
 	Options           map[string]interface{} `json:"options,omitempty"`
+	// 蓝图复刻:统一次级参数面
+	DomainBoost    string         `json:"domain_boost,omitempty"`
+	SnippetChars   int            `json:"snippet_chars,omitempty"`
+	ContentChars   int            `json:"content_chars,omitempty"`
+	ResponseFormat ResponseFormat  `json:"response_format,omitempty"`
+	Debug          bool           `json:"debug,omitempty"`
 }
 
 type SearchResponse struct {
 	Results   []SearchResult        `json:"results"`
 	Providers []ProviderCallSummary `json:"providers"`
 	Meta      SearchMeta            `json:"meta"`
+	// 蓝图复刻:resolved_policy 必须出现在每次 search 返回的顶层
+	ResolvedPolicy *ResolvedPolicy `json:"resolved_policy,omitempty"`
+	// debug 模式下返回的策略详情
+	Debug *SearchDebug `json:"debug,omitempty"`
+}
+
+type ResolvedPolicy struct {
+	Policy          string `json:"policy"`
+	ModePolicy      string `json:"mode_policy"`
+	SourcePolicy    string `json:"source_policy"`
+	FreshnessPolicy string `json:"freshness_policy"`
+	Why             string `json:"why"`
+}
+
+type SearchDebug struct {
+	Policy       *ResolvedPolicy       `json:"policy,omitempty"`
+	Latency      map[string]int64      `json:"latency_ms,omitempty"`
+	VerifyTrace  []VerifyTrace         `json:"verify_trace,omitempty"`
+	SearchMeta   map[string]interface{} `json:"search_meta,omitempty"`
+}
+
+type VerifyTrace struct {
+	URL         string  `json:"url"`
+	Provider    string  `json:"provider"`
+	Consistency float64 `json:"consistency"`
+	Status      string  `json:"status"`
+	Reason      string  `json:"reason,omitempty"`
 }
 
 type SearchResult struct {
@@ -95,6 +155,8 @@ type SearchMeta struct {
 	CacheHit         bool         `json:"cache_hit"`
 	CacheKey         string       `json:"cache_key,omitempty"`
 	ProvidersQueried []string     `json:"providers_queried"`
+	// 蓝图复刻:warnings 三类
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 type ProviderResponse struct {
