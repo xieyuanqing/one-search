@@ -18,8 +18,8 @@ import (
 )
 
 const (
-    oauthAuthorizationCodeTTL = 5 * time.Minute
-    oauthAccessTokenTTL       = time.Hour
+    oauthAuthorizationCodeTTL = 30 * 24 * time.Hour
+    oauthAccessTokenTTL       = 365 * 24 * time.Hour
     oauthScope                = "search"
 )
 

@@ -321,5 +321,6 @@ export const api = {
   providerHealth: () => apiFetch<{ providers: ProviderHealth[] }>('/api/admin/providers/health'),
   metrics: () => apiFetch<GatewayMetrics>('/api/admin/metrics'),
   auditLogs: () => apiFetch<{ logs: AuditLog[] }>('/api/admin/audit-logs?limit=100'),
-  playgroundSearch: (payload: Record<string, unknown>) => apiFetch('/api/admin/playground/search', { method: 'POST', body: JSON.stringify(payload) })
+  playgroundSearch: (payload: Record<string, unknown>) => apiFetch('/api/admin/playground/search', { method: 'POST', body: JSON.stringify(payload) }),
+  playgroundFetch: (payload: Record<string, unknown>) => apiFetch('/api/admin/playground/fetch', { method: 'POST', body: JSON.stringify(payload) })
 }

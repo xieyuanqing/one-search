@@ -1,10 +1,10 @@
 <template>
-  <div class="playground-page" :class="result ? 'has-result' : 'is-home'">
+  <div class="playground-page" :class="(result || fetchResult) ? 'has-result' : 'is-home'">
     <div class="hero">
       <div class="brand">
         <h1>One<em>Search</em></h1>
         <p>
-          统一搜索调试
+          搜索与抓取调试
           <el-tag :type="ready ? 'success' : 'warning'" effect="light" round size="small">
             {{ ready ? '可用' : '待配置' }}
           </el-tag>
@@ -21,21 +21,29 @@
           <el-button type="primary" @click="$router.push('/providers')">去配置</el-button>
         </div>
 
-        <div class="shell" :class="{ blocked: !ready }">
+        <div class="mode-tabs">
+          <button class="mode-tab" :class="{ on: mode === 'search' }" @click="mode = 'search'">搜索</button>
+          <button class="mode-tab" :class="{ on: mode === 'fetch' }" @click="mode = 'fetch'">抓取</button>
+        </div>
+
+        <div class="shell" :class="{ blocked: !ready && mode === 'search' }">
           <div class="search-row">
             <el-icon class="search-icon" :size="18"><Search /></el-icon>
             <el-input
               v-model="form.query"
               class="search-input"
-              placeholder="输入搜索词"
-              :disabled="!ready"
-              @keyup.enter="run"
+              :placeholder="mode === 'search' ? '输入搜索词' : '输入网页 URL'"
+              :disabled="mode === 'search' && !ready"
+              @keyup.enter="mode === 'search' ? run() : runFetch()"
             />
-            <el-button type="primary" class="search-btn" :loading="loading" :disabled="!ready || !form.query.trim()" @click="run">
+            <el-button v-if="mode === 'search'" type="primary" class="search-btn" :loading="loading" :disabled="!ready || !form.query.trim()" @click="run">
               搜索
             </el-button>
+            <el-button v-else type="primary" class="search-btn" :loading="fetchLoading" :disabled="!form.query.trim()" @click="runFetch">
+              抓取
+            </el-button>
           </div>
-          <div class="filters">
+          <div v-if="mode === 'search'" class="filters">
             <label class="chip on">
               <span>意图</span>
               <el-select v-model="form.intent" size="small" :disabled="!ready" class="chip-select intent-select">
@@ -102,7 +110,48 @@
             </label>
           </div>
         </div>
+
+        <div v-if="!result && searchHistory.length" class="history-row">
+          <span class="history-label">最近搜索</span>
+          <button
+            v-for="item in searchHistory"
+            :key="item.ts"
+            class="history-chip"
+            type="button"
+            @click="rerunHistory(item.query)"
+          >{{ item.query }}</button>
+        </div>
       </template>
+    </div>
+
+    <div v-if="fetchResult" class="stage">
+      <div class="stats">
+        <span class="pill"><b>{{ fetchResult.extractor || '—' }}</b></span>
+        <span class="pill">字符 <b>{{ fetchResult.chars_returned || 0 }}</b> / {{ fetchResult.chars_total || 0 }}</span>
+        <span v-if="fetchResult.truncated" class="pill">已截断</span>
+      </div>
+
+      <div v-if="fetchResult.rewrite_attempt?.applied" class="policy-strip">
+        <div class="policy-summary">
+          <span class="policy-label">URL 重写</span>
+          <strong>{{ fetchResult.rewrite_attempt.reason }}</strong>
+          <span class="policy-why">{{ fetchResult.rewrite_attempt.original }} → {{ fetchResult.rewrite_attempt.rewritten }}</span>
+        </div>
+      </div>
+
+      <div v-if="fetchResult.fetch_trace?.length" class="fetch-trace">
+        <h4>抓取链路</h4>
+        <div v-for="(step, idx) in fetchResult.fetch_trace" :key="idx" class="trace-step">
+          <span class="trace-step-name">{{ step.step }}</span>
+          <span class="trace-step-status" :class="(step.http_status ?? 0) >= 400 || step.status === 'error' ? 'fail' : 'ok'">
+            {{ step.status }}{{ step.http_status ? ' · ' + step.http_status : '' }}
+          </span>
+          <span v-if="step.message" class="trace-step-msg">{{ step.message }}</span>
+        </div>
+      </div>
+
+      <div v-if="fetchResult.content" class="fetch-content">{{ fetchResult.content }}</div>
+      <el-empty v-else description="未抓取到内容" />
     </div>
 
     <div v-if="result" class="stage">
@@ -134,20 +183,27 @@
             :style="{ animationDelay: `${0.08 + index * 0.05}s` }"
           >
             <div class="site">
-              <span class="ico">{{ siteInitial(item.url, item.title) }}</span>
+              <img
+                v-if="item.url"
+                class="favicon"
+                :src="faviconURL(item.url)"
+                alt=""
+                loading="lazy"
+                @error="onFaviconError"
+              />
+              <span v-else class="ico">{{ siteInitial(item.url, item.title) }}</span>
               <span class="site-text">{{ siteLabel(item.url) || '无链接' }}</span>
             </div>
             <h3>
-              <a v-if="item.url" :href="item.url" target="_blank" rel="noreferrer">{{ item.title || item.url }}</a>
-              <span v-else>{{ item.title || '无标题' }}</span>
+              <a v-if="item.url" :href="item.url" target="_blank" rel="noreferrer" v-html="highlight(item.title || item.url)"></a>
+              <span v-else v-html="highlight(item.title || '无标题')"></span>
             </h3>
             <p
               v-if="item.snippet || item.content"
               class="snip"
               :class="{ open: isResultOpen(resultKey('merged', index, item)) }"
-            >
-              {{ isResultOpen(resultKey('merged', index, item)) ? (item.content || item.snippet) : (item.snippet || item.content) }}
-            </p>
+              v-html="highlight(isResultOpen(resultKey('merged', index, item)) ? (item.content || item.snippet) : (item.snippet || item.content))"
+            ></p>
             <div class="foot">
               <span class="tag">{{ resultProviderLabel(item) }}</span>
               <span v-if="item.score !== undefined" class="tag muted">评分 {{ formatScore(item.score) }}</span>
@@ -207,7 +263,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus/es/components/message/index'
 import { Search } from '@element-plus/icons-vue'
 import PageSkeleton from '../components/PageSkeleton.vue'
@@ -272,10 +328,48 @@ type SearchResponse = {
   }
 }
 
+type FetchTraceStep = {
+  step: string
+  status: string
+  http_status?: number
+  message?: string
+}
+
+type FetchResult = {
+  url: string
+  content: string
+  chars_returned: number
+  chars_total: number
+  truncated: boolean
+  next_offset: number
+  offset_scope: string
+  extractor: string
+  error?: string
+  logs?: string[]
+  fetch_trace?: FetchTraceStep[]
+  rewrite_attempt?: {
+    original: string
+    rewritten: string
+    applied: boolean
+    reason: string
+  }
+}
+
 const loading = ref(false)
 const loadingMeta = ref(true)
 const ready = ref(false)
 const result = ref<SearchResponse | null>(null)
+const fetchResult = ref<FetchResult | null>(null)
+const fetchLoading = ref(false)
+const mode = ref<'search' | 'fetch'>('search')
+
+watch(mode, (val) => {
+  if (val === 'search') {
+    fetchResult.value = null
+  } else {
+    result.value = null
+  }
+})
 const resultListEl = ref<HTMLElement | null>(null)
 const openResultKeys = ref<string[]>([])
 const providers = ref<ProviderConfig[]>([])
@@ -414,6 +508,68 @@ function siteInitial(url?: string, title?: string) {
   return raw.replace(/^www\./i, '').charAt(0).toUpperCase() || '?'
 }
 
+function faviconURL(url: string) {
+  try {
+    const parsed = new URL(url)
+    return `https://www.google.com/s2/favicons?domain=${parsed.hostname}&sz=32`
+  } catch {
+    return ''
+  }
+}
+
+function onFaviconError(e: Event) {
+  const img = e.target as HTMLImageElement
+  const parent = img.parentElement
+  if (parent) {
+    const span = document.createElement('span')
+    span.className = 'ico'
+    span.textContent = '?'
+    parent.replaceChild(span, img)
+  }
+}
+
+function escapeHTML(text: string): string {
+  const div = document.createElement('div')
+  div.textContent = text || ''
+  return div.innerHTML
+}
+
+function highlight(text?: string): string {
+  if (!text) return ''
+  const safe = escapeHTML(text)
+  const query = form.query.trim()
+  if (!query) return safe
+  const tokens = query.split(/\s+/).filter((t) => t.length >= 2)
+  if (!tokens.length) return safe
+  const pattern = tokens.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')
+  const regex = new RegExp(`(${pattern})`, 'gi')
+  return safe.replace(regex, '<mark>$1</mark>')
+}
+
+const searchHistory = ref<{ query: string; ts: number }[]>([])
+
+function loadHistory() {
+  try {
+    const raw = localStorage.getItem('osr.playground.history')
+    if (raw) searchHistory.value = JSON.parse(raw)
+  } catch { /* ignore */ }
+}
+
+function saveHistory(query: string) {
+  const trimmed = query.trim()
+  if (!trimmed) return
+  searchHistory.value = [
+    { query: trimmed, ts: Date.now() },
+    ...searchHistory.value.filter((item) => item.query !== trimmed)
+  ].slice(0, 8)
+  localStorage.setItem('osr.playground.history', JSON.stringify(searchHistory.value))
+}
+
+function rerunHistory(query: string) {
+  form.query = query
+  run()
+}
+
 function providerCallKey(call: ProviderCallLog, index: number) {
   return `${call.provider_name}-${call.provider_key_id || 'no-key'}-${call.attempt_index || 1}-${index}`
 }
@@ -475,6 +631,7 @@ async function run() {
   }
   loading.value = true
   openResultKeys.value = []
+  saveHistory(form.query)
   try {
     const payload: Record<string, unknown> = {
       query: form.query,
@@ -495,7 +652,28 @@ async function run() {
   }
 }
 
-onMounted(loadMeta)
+async function runFetch() {
+  const url = form.query.trim()
+  if (!url) {
+    ElMessage.warning('请输入网页 URL')
+    return
+  }
+  fetchLoading.value = true
+  fetchResult.value = null
+  result.value = null
+  try {
+    fetchResult.value = await api.playgroundFetch({ url, max_chars: 8000, remote_first: true }) as FetchResult
+  } catch (error) {
+    ElMessage.error((error as Error).message)
+  } finally {
+    fetchLoading.value = false
+  }
+}
+
+onMounted(() => {
+  loadHistory()
+  loadMeta()
+})
 </script>
 
 <style scoped>
@@ -594,17 +772,95 @@ onMounted(loadMeta)
   padding: 14px 16px;
   border: 1px solid #f5d0a8;
   border-radius: 14px;
-  background: #fffaf0;
+  background: #FFF8EC;
   animation: rise .4s ease both;
 }
 .setup-banner p { margin: 0 0 2px; font-weight: 700; }
 .setup-banner .sub { color: var(--muted); font-size: 12px; }
 
+.mode-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 10px;
+  justify-content: center;
+}
+.mode-tab {
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 20px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all .15s ease;
+}
+.mode-tab:hover {
+  border-color: #b7e4d2;
+  color: var(--primary-ink);
+}
+.mode-tab.on {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
+.fetch-trace {
+  margin-bottom: 12px;
+}
+.fetch-trace h4 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  color: var(--muted);
+}
+.trace-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card-2);
+  margin-bottom: 4px;
+  font-size: 12px;
+}
+.trace-step-name {
+  font-weight: 650;
+  color: var(--text);
+}
+.trace-step-status {
+  font-size: 11px;
+  font-weight: 600;
+  font-family: var(--mono);
+}
+.trace-step-status.ok { color: var(--primary); }
+.trace-step-status.fail { color: var(--danger); }
+.trace-step-msg {
+  color: var(--faint);
+  font-size: 11px;
+  margin-left: auto;
+}
+.fetch-content {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 16px 18px;
+  white-space: pre-wrap;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text-2);
+  max-height: 60vh;
+  overflow-y: auto;
+  word-break: break-word;
+}
+
 .shell {
   width: 100%;
-  background: #fff;
+  background: var(--card);
   border-radius: 20px;
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow-lg);
   border: 1px solid var(--border);
   padding: 10px;
   transition: box-shadow .2s ease, border-color .2s ease;
@@ -640,19 +896,19 @@ onMounted(loadMeta)
   flex-wrap: wrap;
   gap: 8px;
   padding: 10px 8px 4px;
-  border-top: 1px solid #f0f2f5;
+  border-top: 1px solid var(--border-soft);
   margin-top: 6px;
 }
 .chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  background: #f6f7f9;
+  background: var(--bg-2);
   border: 1px solid var(--border);
   border-radius: 999px;
   padding: 4px 10px 4px 12px;
   font-size: 12px;
-  color: #475467;
+  color: var(--muted);
   font-weight: 600;
   transition: background .15s, border-color .15s, transform .12s;
 }
@@ -697,14 +953,14 @@ onMounted(loadMeta)
   margin-bottom: 10px;
   padding: 10px 12px;
   border-left: 3px solid var(--primary);
-  background: #f7faf9;
+  background: var(--primary-soft);
   font-size: 12px;
-  color: #475467;
+  color: var(--muted);
 }
 .policy-summary { min-width: 0; }
 .policy-label { margin-right: 8px; color: var(--muted); }
 .policy-summary strong { margin-right: 10px; color: var(--primary-ink); }
-.policy-why { color: #667085; }
+.policy-why { color: var(--faint); }
 .policy-dimensions {
   display: flex;
   flex-wrap: wrap;
@@ -724,7 +980,7 @@ onMounted(loadMeta)
   animation: fade-in .4s .1s ease both;
 }
 .pill {
-  background: #fff;
+  background: var(--card);
   border: 1px solid var(--border);
   border-radius: 999px;
   padding: 4px 10px;
@@ -753,25 +1009,25 @@ onMounted(loadMeta)
 }
 .result-list::-webkit-scrollbar { width: 8px; }
 .result-list::-webkit-scrollbar-thumb {
-  background: #d0d5dd;
+  background: var(--faint);
   border-radius: 99px;
 }
 .result-list::-webkit-scrollbar-track { background: transparent; }
 
 .result {
-  background: #fff;
-  border: 1px solid #e8eaed;
+  background: var(--card);
+  border: 1px solid var(--border);
   border-radius: 16px;
   padding: 16px 18px;
   margin-bottom: 12px;
-  box-shadow: 0 1px 2px rgba(16,24,40,.03);
+  box-shadow: var(--shadow);
   transition: box-shadow .2s, border-color .2s, transform .2s;
   animation: rise .45s ease both;
 }
 .result:last-child { margin-bottom: 4px; }
 .result:hover {
-  border-color: #cfe8dc;
-  box-shadow: 0 10px 28px rgba(11,110,79,.1);
+  border-color: #b7e4d2;
+  box-shadow: 0 10px 28px rgba(11,110,79,.08);
   transform: translateY(-2px);
 }
 .site {
@@ -798,6 +1054,58 @@ onMounted(loadMeta)
   font-weight: 700;
   color: var(--primary);
   flex: 0 0 auto;
+}
+.favicon {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  flex: 0 0 auto;
+  object-fit: cover;
+  background: #f2f4f7;
+}
+mark {
+  background: rgba(11, 110, 79, 0.12);
+  color: var(--primary-ink);
+  border-radius: 3px;
+  padding: 0 2px;
+  font-weight: 600;
+}
+
+.history-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 14px;
+  padding: 0 4px;
+  animation: fade-in .4s .2s ease both;
+}
+.history-label {
+  font-size: 12px;
+  color: var(--faint);
+  font-weight: 600;
+  margin-right: 4px;
+}
+.history-chip {
+  border: 1px solid var(--border);
+  background: #fff;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  padding: 5px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all .15s ease;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.history-chip:hover {
+  border-color: #b7e4d2;
+  color: var(--primary-ink);
+  background: var(--primary-soft);
+  transform: translateY(-1px);
 }
 .result h3 {
   margin: 8px 0 6px;
@@ -852,7 +1160,7 @@ onMounted(loadMeta)
 }
 .tag.muted {
   color: var(--muted);
-  background: #f2f4f7;
+  background: var(--bg-2);
 }
 .expand-btn {
   border: 0;
@@ -874,11 +1182,11 @@ onMounted(loadMeta)
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  background: #fff;
-  border: 1px solid #e8eaed;
+  background: var(--card);
+  border: 1px solid var(--border);
   border-radius: 16px;
   padding: 14px;
-  box-shadow: 0 1px 2px rgba(16,24,40,.04), 0 12px 32px rgba(16,24,40,.08);
+  box-shadow: var(--shadow-lg);
   animation: float-in .45s .15s ease both;
   z-index: 2;
 }
@@ -913,8 +1221,8 @@ onMounted(loadMeta)
 .live.on i { animation: pulse-dot 1.4s ease infinite; }
 
 .call {
-  background: #f8faf9;
-  border: 1px solid #e8eaed;
+  background: var(--card-2);
+  border: 1px solid var(--border);
   border-radius: 12px;
   padding: 11px 12px;
   margin-bottom: 8px;
@@ -922,9 +1230,9 @@ onMounted(loadMeta)
   animation: rise .4s ease both;
 }
 .call:hover {
-  background: #fff;
-  border-color: #cfe8dc;
-  box-shadow: 0 6px 16px rgba(11,110,79,.08);
+  background: var(--card);
+  border-color: #b7e4d2;
+  box-shadow: 0 6px 16px rgba(11,110,79,.06);
   transform: translateY(-1px);
 }
 .call .top {
@@ -947,7 +1255,7 @@ onMounted(loadMeta)
 .latency {
   margin-top: 10px;
   height: 3px;
-  background: #eef1f4;
+  background: var(--border-soft);
   border-radius: 99px;
   overflow: hidden;
 }
@@ -964,7 +1272,7 @@ onMounted(loadMeta)
 .panel-meta {
   margin-top: 10px;
   padding-top: 10px;
-  border-top: 1px solid #eef1f4;
+  border-top: 1px solid var(--border-soft);
   font-size: 11px;
   color: var(--faint);
   line-height: 1.5;

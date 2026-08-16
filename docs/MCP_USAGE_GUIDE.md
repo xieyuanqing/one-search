@@ -49,7 +49,7 @@ Authorization: https://mcp.nijikit.com/oauth/authorize
 Token:         https://mcp.nijikit.com/oauth/token
 ```
 
-Access Token 有效期为 1 小时。OAuth 客户端应使用：
+Access Token 有效期为 1 年 (365 天)。OAuth 客户端应使用：
 
 ```http
 Authorization: Bearer <access_token>

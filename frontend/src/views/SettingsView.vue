@@ -125,7 +125,7 @@
         <div class="blueprint-details oauth-details">
           <div class="detail-block">
             <strong>远程 MCP OAuth</strong>
-            <span>OAuth 2.1 授权码流 + S256 PKCE · Access Token 有效期 1 小时</span>
+            <span>OAuth 2.1 授权码流 + S256 PKCE · Access Token 有效期 1 年 (365 天)</span>
           </div>
           <div class="detail-block">
             <strong>连接器配置</strong>

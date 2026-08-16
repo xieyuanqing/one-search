@@ -99,14 +99,14 @@
       <section class="bottom-grid">
         <div class="card chart-card">
           <div class="sec-hd">
-            <h3>成本估算</h3>
+            <h3>成本趋势</h3>
             <span class="muted">{{ rangeMeta.label }}</span>
           </div>
           <div ref="costRef" class="chart cost" />
         </div>
         <div class="card bill-card">
           <div class="sec-hd">
-            <h3>成本估算</h3>
+            <h3>成本明细</h3>
             <span class="muted">公开价目表 · {{ rangeMeta.label }}</span>
           </div>
           <div class="bill-list">

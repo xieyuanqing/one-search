@@ -160,6 +160,7 @@ func (h *Handler) Mount(r chi.Router) {
 			r.Get("/metrics", h.metrics)
 			r.Get("/audit-logs", h.auditLogs)
 			r.Post("/playground/search", h.adminSearch)
+			r.Post("/playground/fetch", h.adminFetch)
 		})
 	})
 }
@@ -213,6 +214,29 @@ func (h *Handler) adminSearch(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, response)
+}
+
+func (h *Handler) adminFetch(w http.ResponseWriter, r *http.Request) {
+	body, err := readBody(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	var req model.FetchRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if strings.TrimSpace(req.URL) == "" {
+		writeError(w, http.StatusBadRequest, "url is required")
+		return
+	}
+	// Default to remote-first (markdown.new -> Jina -> direct)
+	if !hasJSONField(body, "remote_first") {
+		req.RemoteFirst = true
+	}
+	result := h.fetcher.Fetch(r.Context(), req)
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (h *Handler) runSearch(w http.ResponseWriter, r *http.Request, req model.SearchRequest) {
