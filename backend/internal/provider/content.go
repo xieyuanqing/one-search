@@ -10,6 +10,7 @@ import (
 var (
 	contentHTMLTagRe = regexp.MustCompile(`(?s)<[^>]+>`)
 	contentSpaceRe   = regexp.MustCompile(`\s+`)
+	contentPunctRe   = regexp.MustCompile(`\s+([,.;:!?])`)
 )
 
 const noDescriptionPlaceholder = "we cannot provide a description for this page right now"
@@ -34,6 +35,7 @@ func cleanContentParagraph(value string) string {
 	value = contentHTMLTagRe.ReplaceAllString(value, " ")
 	value = html.UnescapeString(value)
 	value = contentSpaceRe.ReplaceAllString(value, " ")
+	value = contentPunctRe.ReplaceAllString(value, "$1")
 	return strings.TrimSpace(value)
 }
 

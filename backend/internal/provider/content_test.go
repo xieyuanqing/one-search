@@ -24,3 +24,14 @@ func TestCleanSearchContentRemovesPlaceholderAndEntities(t *testing.T) {
 		t.Fatalf("cleanSearchContent() = %q, want %q", content, want)
 	}
 }
+
+func TestCleanSearchContentNormalizesPunctuationSpacing(t *testing.T) {
+	content := cleanSearchContent(
+		"Kimi K3 scores 60 , compared with GLM-5.2 at 53...",
+		"Kimi K3 scores 60, compared with GLM-5.2 at 53.",
+	)
+	want := "Kimi K3 scores 60, compared with GLM-5.2 at 53."
+	if content != want {
+		t.Fatalf("cleanSearchContent() = %q, want %q", content, want)
+	}
+}
