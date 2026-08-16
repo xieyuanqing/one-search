@@ -113,9 +113,9 @@ func normalizeBraveResults(payload map[string]interface{}, includeRaw bool) []mo
 		}
 		snippet := stringValue(item, "description", "snippet")
 		extraSnippets := stringArrayValue(item, "extra_snippets")
-		content := snippet
-		if len(extraSnippets) > 0 {
-			content = strings.Join(append([]string{snippet}, extraSnippets...), "\n")
+		content := cleanSearchContent(append([]string{snippet}, extraSnippets...)...)
+		if content == "" {
+			continue
 		}
 		result := model.SearchResult{
 			Title:       stringValue(item, "title"),
