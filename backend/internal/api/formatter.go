@@ -41,18 +41,14 @@ func formatCompact(response model.SearchResponse, req model.SearchRequest) map[s
 			"title":  r.Title,
 			"url":    r.URL,
 			"score":  r.Score,
-			"source": r.Providers, // 多源标记
+			"source": r.Providers,
 		}
-		if len(r.Providers) > 0 {
-			item["provider"] = r.Providers[0]
-		} else if r.Provider != "" {
-			item["provider"] = r.Provider
+		content := r.Content
+		if content == "" {
+			content = r.Snippet
 		}
-		if r.Snippet != "" {
-			item["content"] = r.Snippet // 蓝图 §7.2: snippet → content
-		}
-		if r.Content != "" && r.Content != r.Snippet {
-			item["content_full"] = r.Content
+		if content != "" {
+			item["content"] = content
 		}
 		if r.PublishedAt != nil {
 			item["date"] = r.PublishedAt.Format("2006-01-02T15:04:05Z07:00")

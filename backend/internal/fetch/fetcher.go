@@ -3,9 +3,9 @@ package fetch
 import (
 	"context"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
-	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -17,6 +17,9 @@ import (
 var (
 	githubRepoRe = regexp.MustCompile(`^https?://github\.com/([^/]+)/([^/]+)/?$`)
 	discourseRe  = regexp.MustCompile(`^https?://([^/]+)/t/([^/]+)/(\d+)(?:/.*)?$`)
+	htmlNoiseRe  = regexp.MustCompile(`(?is)<(?:script|style|noscript|svg|template)[^>]*>.*?</(?:script|style|noscript|svg|template)\s*>`)
+	htmlTagRe    = regexp.MustCompile(`(?s)<[^>]+>`)
+	spaceRe      = regexp.MustCompile(`[	 \f\v]+`)
 )
 
 type Fetcher struct {
@@ -84,24 +87,21 @@ func (f *Fetcher) Fetch(ctx context.Context, req model.FetchRequest) model.Fetch
 	var extractor string
 	var err error
 
-	// Rewritten URLs are fetched directly; normal URLs follow the selected pipeline.
+	// URL rewrites change the target only; extraction policy remains the same.
 	if rewriteAttempt.Applied {
 		logs = append(logs, fmt.Sprintf("url_rewritten: %s -> %s (%s)", req.URL, fetchURL, rewriteAttempt.Reason))
-		if !req.RemoteFirst {
-			rawContent, extractor, err = f.fetchDirect(ctx, fetchURL, &traces)
-		}
 	}
 
-	// remote_first=true 使用 markdown.new -> Jina；false 使用本机直连。
+	// remote_first=true uses markdown.new, then Jina Reader, then local extraction.
 	if req.RemoteFirst {
-		// Step 1: try markdown.new
 		rawContent, extractor, err = f.fetchMarkdownNew(ctx, fetchURL, &traces)
 		if err != nil || rawContent == "" {
 			logs = append(logs, fmt.Sprintf("markdown_new_failed: %v, falling back to jina reader", err))
 			rawContent, extractor, err = f.fetchJinaReader(ctx, fetchURL, &traces)
-		if err != nil {
-			logs = append(logs, fmt.Sprintf("jina_reader_failed: %v", err))
 		}
+		if err != nil || rawContent == "" {
+			logs = append(logs, fmt.Sprintf("jina_reader_failed: %v, falling back to direct extraction", err))
+			rawContent, extractor, err = f.fetchDirect(ctx, fetchURL, &traces)
 		}
 	} else {
 		rawContent, extractor, err = f.fetchDirect(ctx, fetchURL, &traces)
@@ -212,12 +212,35 @@ func (f *Fetcher) fetchDirect(ctx context.Context, targetURL string, traces *[]m
 	if err != nil {
 		return "", "", err
 	}
-	return string(body), "direct_rewritten", nil
+	content := string(body)
+	contentType := strings.ToLower(resp.Header.Get("Content-Type"))
+	if strings.Contains(contentType, "text/html") || strings.Contains(strings.ToLower(content), "<html") {
+		content = extractHTMLText(content)
+		*traces = append(*traces, model.FetchTraceStep{Step: "html_extract", Status: "success"})
+	}
+	return content, "direct-extracted", nil
+}
+
+func extractHTMLText(source string) string {
+	text := htmlNoiseRe.ReplaceAllString(source, " ")
+	text = htmlTagRe.ReplaceAllString(text, " ")
+	text = html.UnescapeString(text)
+	text = spaceRe.ReplaceAllString(text, " ")
+	lines := strings.Split(text, "\n")
+	clean := make([]string, 0, len(lines))
+	for _, line := range lines {
+		if line = strings.TrimSpace(line); line != "" {
+			clean = append(clean, line)
+		}
+	}
+	return strings.Join(clean, "\n")
 }
 
 func (f *Fetcher) fetchMarkdownNew(ctx context.Context, targetURL string, traces *[]model.FetchTraceStep) (string, string, error) {
-	escaped := url.QueryEscape(targetURL)
-	reqURL := "https://markdown.new/" + escaped
+	// markdown.new accepts the target as a URL path, not a URL-encoded path.
+	// Example: https://markdown.new/github.com/org/repo/
+	reqURL := "https://markdown.new/" + strings.TrimPrefix(targetURL, "https://")
+	reqURL = strings.TrimPrefix(reqURL, "https://markdown.new/http://")
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
 		return "", "", err

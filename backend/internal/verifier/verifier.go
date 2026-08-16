@@ -87,7 +87,6 @@ func (v *Verifier) VerifyResults(ctx context.Context, results []model.SearchResu
 				Consistency: consistency,
 				Status:      "unverified_kept",
 			})
-			warnings = append(warnings, fmt.Sprintf("unverified_kept:%s", item.URL))
 			verified = append(verified, item)
 		}
 	}

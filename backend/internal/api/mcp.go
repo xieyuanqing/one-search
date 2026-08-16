@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 
@@ -357,6 +358,9 @@ func (h *Handler) handleMCPFetch(r *http.Request, req mcpRequest, args json.RawM
 	if strings.TrimSpace(fetchReq.URL) == "" {
 		return nil, mcpInvalidParams(req.ID, "url is required")
 	}
+	if !hasJSONField(args, "remote_first") {
+		fetchReq.RemoteFirst = true
+	}
 
 	result := h.fetcher.Fetch(r.Context(), fetchReq)
 	payload, err := json.MarshalIndent(result, "", "  ")
@@ -380,6 +384,9 @@ func (h *Handler) handleMCPFetchMany(r *http.Request, req mcpRequest, args json.
 	if len(fetchManyReq.URLs) == 0 {
 		return nil, mcpInvalidParams(req.ID, "urls is required")
 	}
+	if !hasJSONField(args, "remote_first") {
+		fetchManyReq.RemoteFirst = true
+	}
 
 	result := h.fetcher.FetchMany(r.Context(), fetchManyReq)
 	payload, err := json.MarshalIndent(result, "", "  ")
@@ -402,6 +409,9 @@ func (h *Handler) handleMCPSearchAndFetch(r *http.Request, req mcpRequest, args 
 	}
 	if strings.TrimSpace(sfReq.Query) == "" {
 		return nil, mcpInvalidParams(req.ID, "query is required")
+	}
+	if !hasJSONField(args, "remote_first") {
+		sfReq.RemoteFirst = true
 	}
 
 	searchArgs, _ := json.Marshal(model.SearchRequest{
@@ -514,14 +524,16 @@ func (h *Handler) handleMCPBatchSearch(r *http.Request, req mcpRequest, args jso
 	}
 	wg.Wait()
 
+	merged := mergeBatchBuckets(buckets, rawArgs.Num)
 	result := map[string]interface{}{
-		"count": len(buckets),
+		"query_count":  len(buckets),
+		"count":        len(merged),
+		"merged_count": len(merged),
+		"merged_results": merged,
 	}
 	if rawArgs.ReturnBuckets {
 		result["buckets"] = buckets
 	}
-	result["merged_results"] = mergeBatchBuckets(buckets, rawArgs.Num)
-
 
 	payload, _ := json.MarshalIndent(result, "", "  ")
 	return map[string]interface{}{
@@ -532,56 +544,87 @@ func (h *Handler) handleMCPBatchSearch(r *http.Request, req mcpRequest, args jso
 }
 
 func mergeBatchBuckets(buckets []batchQueryBucket, limit int) []map[string]interface{} {
-	merged := map[string]map[string]interface{}{}
-	order := []string{}
-	for _, bucket := range buckets {
+	if limit <= 0 {
+		limit = 10
+	}
+
+	bucketItems := make([][]map[string]interface{}, len(buckets))
+	for bucketIndex, bucket := range buckets {
 		payload, ok := bucket.Response.(map[string]interface{})
 		if !ok {
 			continue
 		}
-		var rawItems []interface{}
-		switch items := payload["results"].(type) {
-		case []interface{}:
-			rawItems = items
-		case []map[string]interface{}:
-			for _, item := range items {
-				rawItems = append(rawItems, item)
-			}
-		default:
-			continue
-		}
-		for _, rawItem := range rawItems {
+		for _, rawItem := range resultItems(payload["results"]) {
 			item, ok := rawItem.(map[string]interface{})
-			if !ok {
+			if !ok || canonicalResultURL(item) == "" {
 				continue
 			}
-			rawURL, _ := item["url"].(string)
-			canonical := strings.TrimRight(strings.ToLower(strings.TrimSpace(rawURL)), "/")
-			if canonical == "" {
-				continue
-			}
-			if existing, found := merged[canonical]; found {
-				oldScore, _ := existing["score"].(float64)
-				newScore, _ := item["score"].(float64)
-				existing["score"] = oldScore + newScore
-				continue
-			}
-			clone := map[string]interface{}{}
+			clone := make(map[string]interface{}, len(item)+1)
 			for key, value := range item {
 				clone[key] = value
 			}
-			merged[canonical] = clone
-			order = append(order, canonical)
+			clone["_bucket_index"] = bucketIndex
+			bucketItems[bucketIndex] = append(bucketItems[bucketIndex], clone)
+		}
+		sort.SliceStable(bucketItems[bucketIndex], func(i, j int) bool {
+			return resultScore(bucketItems[bucketIndex][i]) > resultScore(bucketItems[bucketIndex][j])
+		})
+	}
+
+	positions := make([]int, len(bucketItems))
+	merged := make(map[string]map[string]interface{})
+	result := make([]map[string]interface{}, 0, limit)
+	for len(result) < limit {
+		progress := false
+		for bucketIndex, items := range bucketItems {
+			for positions[bucketIndex] < len(items) {
+				item := items[positions[bucketIndex]]
+				positions[bucketIndex]++
+				canonical := canonicalResultURL(item)
+				if existing, found := merged[canonical]; found {
+					existing["score"] = resultScore(existing) + resultScore(item)
+					continue
+				}
+				delete(item, "_bucket_index")
+				merged[canonical] = item
+				result = append(result, item)
+				progress = true
+				break
+			}
+			if len(result) >= limit {
+				break
+			}
+		}
+		if !progress {
+			break
 		}
 	}
-	result := make([]map[string]interface{}, 0, len(order))
-	for _, key := range order {
-		result = append(result, merged[key])
-	}
-	if limit > 0 && len(result) > limit {
-		result = result[:limit]
-	}
 	return result
+}
+
+func resultItems(value interface{}) []interface{} {
+	switch items := value.(type) {
+	case []interface{}:
+		return items
+	case []map[string]interface{}:
+		out := make([]interface{}, len(items))
+		for i := range items {
+			out[i] = items[i]
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func canonicalResultURL(item map[string]interface{}) string {
+	rawURL, _ := item["url"].(string)
+	return strings.TrimRight(strings.ToLower(strings.TrimSpace(rawURL)), "/")
+}
+
+func resultScore(item map[string]interface{}) float64 {
+	score, _ := item["score"].(float64)
+	return score
 }
 
 func (h *Handler) handleMCPStatus(r *http.Request, req mcpRequest) (interface{}, *mcpResponse) {

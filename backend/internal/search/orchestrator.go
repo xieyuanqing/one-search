@@ -211,7 +211,6 @@ func (o *Orchestrator) Search(ctx context.Context, req model.SearchRequest, requ
 	// debug 模式 [蓝图 §2.1 debug 参数]
 	if req.Debug {
 		debug := &model.SearchDebug{
-			Policy:      resolvedPolicy,
 			Latency:     outcome.latencies,
 			VerifyTrace: outcome.verifyTraces,
 		}
