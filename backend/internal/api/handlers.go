@@ -34,6 +34,15 @@ type AppStore interface {
 	UpdateAPITokenStatus(ctx context.Context, id int64, status string) error
 	UpdateAPIToken(ctx context.Context, id int64, name string, allowedProviders []string, rateLimit, dailyQuota, monthlyQuota int) error
 	DeleteAPIToken(ctx context.Context, id int64) error
+	ListOAuthClients(ctx context.Context) ([]model.OAuthClient, error)
+	CreateOAuthClient(ctx context.Context, name string, redirectURIs, allowedProviders []string) (model.OAuthClient, error)
+	UpdateOAuthClient(ctx context.Context, id int64, name string, redirectURIs, allowedProviders []string, status string) error
+	DeleteOAuthClient(ctx context.Context, id int64) error
+	FindOAuthClient(ctx context.Context, clientID string) (model.OAuthClient, error)
+	CreateOAuthAuthorizationCode(ctx context.Context, clientID int64, code, codeChallenge, redirectURI string) error
+	ConsumeOAuthAuthorizationCode(ctx context.Context, clientID int64, code, redirectURI, codeVerifier string) (model.OAuthClient, error)
+	CreateOAuthAccessToken(ctx context.Context, clientID, apiTokenID int64, token string, expiresAt time.Time) error
+	FindOAuthAccessToken(ctx context.Context, token string) (model.APIToken, error)
 	GetAdminAPIKey(ctx context.Context) (model.AdminAPIKey, error)
 	RotateAdminAPIKey(ctx context.Context) (model.AdminAPIKey, string, error)
 	UpdateRuntimeSettings(ctx context.Context, settings model.RuntimeSettings) error
@@ -101,6 +110,7 @@ func (h *Handler) EnableMCP(path string) {
 }
 
 func (h *Handler) Mount(r chi.Router) {
+	h.mountOAuth(r)
 	if h.mcpEnabled {
 		h.mountMCP(r, h.mcpPath)
 		if h.mcpPath != "/v1/mcp" {
@@ -135,6 +145,10 @@ func (h *Handler) Mount(r chi.Router) {
 			r.Post("/tokens", h.createToken)
 			r.Patch("/tokens/{id}", h.updateToken)
 			r.Delete("/tokens/{id}", h.deleteToken)
+			r.Get("/oauth/clients", h.listOAuthClients)
+			r.Post("/oauth/clients", h.createOAuthClient)
+			r.Patch("/oauth/clients/{id}", h.updateOAuthClient)
+			r.Delete("/oauth/clients/{id}", h.deleteOAuthClient)
 			r.Get("/settings", h.getSettings)
 			r.Put("/settings", h.updateSettings)
 			r.Get("/settings/admin-api-key", h.getAdminAPIKey)

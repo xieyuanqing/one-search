@@ -38,6 +38,20 @@ type APIToken struct {
 	UpdatedAt        time.Time  `json:"updated_at"`
 }
 
+type OAuthClient struct {
+	ID               int64     `json:"id"`
+	Name             string    `json:"name"`
+	ClientID         string    `json:"client_id"`
+	ClientSecretHash string    `json:"-"`
+	ClientSecret     string    `json:"client_secret,omitempty"`
+	APITokenID       int64     `json:"-"`
+	RedirectURIs     []string  `json:"redirect_uris"`
+	AllowedProviders []string  `json:"allowed_providers"`
+	Status           string    `json:"status"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
 type ProviderKeyView struct {
 	ID                         int64      `json:"id"`
 	ProviderID                 int64      `json:"provider_id"`

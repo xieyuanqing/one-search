@@ -5,6 +5,7 @@ const LoginView = () => import('../views/LoginView.vue')
 const DashboardView = () => import('../views/DashboardView.vue')
 const ProvidersView = () => import('../views/ProvidersView.vue')
 const TokensView = () => import('../views/TokensView.vue')
+const OAuthView = () => import('../views/OAuthView.vue')
 const PlaygroundView = () => import('../views/PlaygroundView.vue')
 const LogsView = () => import('../views/LogsView.vue')
 const AuditLogsView = () => import('../views/AuditLogsView.vue')
@@ -18,6 +19,7 @@ const router = createRouter({
     { path: '/providers', component: ProvidersView },
     { path: '/keys', redirect: '/providers' },
     { path: '/tokens', component: TokensView },
+    { path: '/oauth', component: OAuthView },
     { path: '/playground', component: PlaygroundView },
     { path: '/logs', component: LogsView },
     { path: '/audit', component: AuditLogsView },

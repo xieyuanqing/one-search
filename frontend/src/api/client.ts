@@ -205,6 +205,18 @@ export interface AdminAPIKey {
   updated_at?: string
 }
 
+export interface OAuthClient {
+  id: number
+  name: string
+  client_id: string
+  client_secret?: string
+  redirect_uris: string[]
+  allowed_providers: string[]
+  status: 'enabled' | 'disabled' | string
+  created_at: string
+  updated_at: string
+}
+
 export interface RuntimeSettings {
   default_mode: string
   default_providers: string[]
@@ -294,6 +306,10 @@ export const api = {
   createToken: (payload: Record<string, unknown>) => apiFetch<{ token: ApiToken; raw_token: string }>('/api/admin/tokens', { method: 'POST', body: JSON.stringify(payload) }),
   updateToken: (id: number, payload: Record<string, unknown>) => apiFetch('/api/admin/tokens/' + id, { method: 'PATCH', body: JSON.stringify(payload) }),
   deleteToken: (id: number) => apiFetch('/api/admin/tokens/' + id, { method: 'DELETE' }),
+  oauthClients: () => apiFetch<{ clients: OAuthClient[] }>('/api/admin/oauth/clients'),
+  createOAuthClient: (payload: Record<string, unknown>) => apiFetch<OAuthClient>('/api/admin/oauth/clients', { method: 'POST', body: JSON.stringify(payload) }),
+  updateOAuthClient: (id: number, payload: Record<string, unknown>) => apiFetch('/api/admin/oauth/clients/' + id, { method: 'PATCH', body: JSON.stringify(payload) }),
+  deleteOAuthClient: (id: number) => apiFetch('/api/admin/oauth/clients/' + id, { method: 'DELETE' }),
   settings: () => apiFetch<RuntimeSettings>('/api/admin/settings'),
   updateSettings: (payload: RuntimeSettings) => apiFetch<RuntimeSettings>('/api/admin/settings', { method: 'PUT', body: JSON.stringify(payload) }),
   adminAPIKey: () => apiFetch<AdminAPIKey>('/api/admin/settings/admin-api-key'),

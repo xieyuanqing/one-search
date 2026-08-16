@@ -24,6 +24,10 @@
           <el-icon><Key /></el-icon>
           <span>接口令牌</span>
         </el-menu-item>
+        <el-menu-item index="/oauth" title="OAuth 连接器">
+          <el-icon><Connection /></el-icon>
+          <span>OAuth 连接器</span>
+        </el-menu-item>
         <el-menu-item index="/logs" title="请求日志">
           <el-icon><Document /></el-icon>
           <span>请求日志</span>
@@ -64,6 +68,7 @@
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
+  Connection,
   Document,
   Grid,
   Key,

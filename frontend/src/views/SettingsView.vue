@@ -122,6 +122,20 @@
         <div v-if="!settings.api_auth_required" class="warn-banner">
           接口鉴权已关闭，仅建议本地调试环境使用。
         </div>
+        <div class="blueprint-details oauth-details">
+          <div class="detail-block">
+            <strong>远程 MCP OAuth</strong>
+            <span>OAuth 2.1 授权码流 + S256 PKCE · Access Token 有效期 1 小时</span>
+          </div>
+          <div class="detail-block">
+            <strong>连接器配置</strong>
+            <span>在左侧“OAuth 连接器”创建 Client ID / Secret，并限制回调 URI 与可用 Provider</span>
+          </div>
+          <div class="detail-block">
+            <strong>MCP 地址</strong>
+            <span>https://mcp.nijikit.com/mcp · 原有 Bearer API Token 鉴权继续可用</span>
+          </div>
+        </div>
       </section>
 
       <section class="settings-card">

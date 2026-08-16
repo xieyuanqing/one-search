@@ -104,6 +104,7 @@ func (h *Handler) mcp(w http.ResponseWriter, r *http.Request) {
 		if h.mcpRequestsRequireAuth(requests) {
 			ctx, authStatus, authMessage, err := h.mcpAuthContext(r)
 			if err != nil {
+				h.writeMCPAuthChallenge(w, r, authStatus)
 				writeMCPError(w, authStatus, firstMCPRequestID(trimmed), -32001, authMessage, nil)
 				return
 			}
@@ -121,6 +122,7 @@ func (h *Handler) mcp(w http.ResponseWriter, r *http.Request) {
 	if h.mcpRequestsRequireAuth([]mcpRequest{req}) {
 		ctx, authStatus, authMessage, err := h.mcpAuthContext(r)
 		if err != nil {
+			h.writeMCPAuthChallenge(w, r, authStatus)
 			writeMCPError(w, authStatus, req.ID, -32001, authMessage, nil)
 			return
 		}
@@ -684,7 +686,10 @@ func (h *Handler) mcpAuthContext(r *http.Request) (context.Context, int, string,
 	}
 	apiToken, err := h.store.FindAPIToken(r.Context(), token)
 	if err != nil {
-		return r.Context(), http.StatusUnauthorized, "invalid api token", err
+		apiToken, err = h.store.FindOAuthAccessToken(r.Context(), token)
+		if err != nil {
+			return r.Context(), http.StatusUnauthorized, "invalid api token", err
+		}
 	}
 	if !h.auth.allowToken(apiToken) {
 		return r.Context(), http.StatusTooManyRequests, "api token rate limit exceeded", fmt.Errorf("api token rate limit exceeded")
@@ -692,6 +697,13 @@ func (h *Handler) mcpAuthContext(r *http.Request) (context.Context, int, string,
 	ctx := context.WithValue(r.Context(), apiTokenIDKey, apiToken.ID)
 	ctx = context.WithValue(ctx, apiTokenKey, apiToken)
 	return ctx, http.StatusOK, "", nil
+}
+
+func (h *Handler) writeMCPAuthChallenge(w http.ResponseWriter, r *http.Request, status int) {
+	if status != http.StatusUnauthorized {
+		return
+	}
+	w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="`+oauthIssuer(r)+`/.well-known/oauth-protected-resource/mcp"`)
 }
 
 func mcpInitializeResult(params json.RawMessage) map[string]interface{} {
